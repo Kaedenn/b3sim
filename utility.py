@@ -48,6 +48,7 @@ C4_CYN = [0, 1, 1, 1]
 C4_MAG = [1, 0, 1, 1]
 C4_BLK = [0, 0, 0, 1]
 C4_WHT = [1, 1, 1, 1]
+C_NONE = [0, 0, 0, 0]
 
 def withAlpha(c, a):
   "Apply alpha value to the color"
@@ -64,7 +65,7 @@ def unit(v):
   "Convert v to a unit vector"
   return np.divide(v, norm(v))
 
-def d2r(d):
+def deg2rad(d):
   "Convert degrees to radians"
   return d / 360 * np.pi
 # 0}}}
@@ -118,6 +119,29 @@ CAM_AXIS_VECTORS = {
   CAM_AXIS_Z: AXIS_Z
 }
 
+# 0}}}
+
+def parseCameraSpec(spec, dfp, dfy, dfd, dft): # {{{0
+  """Parse a comma-separated string of values as a camera position and
+  orientation"""
+  t = spec.split(",")
+  pitch, yaw, dist, target = dfp, dfy, dfd, dft
+  def getTok(idx, tp, dflt):
+    if len(t) > idx:
+      if t[idx] == 'Df':
+        return dflt
+      try:
+        return tp(t[idx])
+      except ValueError:
+        pass
+    return dflt
+  pitch = getTok(0, float, pitch)
+  yaw = getTok(1, float, yaw)
+  dist = getTok(2, float, dist)
+  target[0] = getTok(3, float, target[0])
+  target[1] = getTok(4, float, target[1])
+  target[2] = getTok(5, float, target[2])
+  return pitch, yaw, dist, target
 # 0}}}
 
 def applyAxisMovements(camera=None, **movements): # {{{0

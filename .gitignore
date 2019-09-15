@@ -4,3 +4,7 @@
 .*.swp
 .*.swo
 old/
+
+# FFI modules
+exmod.*
+xkeys.*

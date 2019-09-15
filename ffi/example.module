@@ -1,0 +1,21 @@
+
+# Example module
+# Build this module with the following command:
+#   python ffi/build.py ffi/example.module
+# Then, use the module as follows:
+#   from exmod import ffi as exmodffi, lib as exmodlib
+#   print(exmodlib.EXMOD_VALUE_1)
+
+{
+  "name": "exmod",
+  "cdef": """
+const int EXMOD_VALUE_1;
+const int EXMOD_VALUE_2;
+""",
+  "code": """
+const int EXMOD_VALUE_1 = 100;
+const int EXMOD_VALUE_2 = 200;
+""",
+  "extra_args": (),
+  "extra_kwargs": {}
+}

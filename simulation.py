@@ -9,15 +9,9 @@ from bulletbase import B3, BulletAppBase
 from utility import *
 from keypressmgr import *
 from greek import *
+from scenarios import *
 
 import numpy as np
-
-# BPL:
-# eye = target - direction * distance
-# forward = (target-eye).normalize()*dt
-# right=forward.cross(up).normalize()*dt
-# up=cam.up*dt
-# and there you go, with right/up/forward and some dx/dy/dz you've got already the offset vectors to adjust your view matrix or eye/target values
 
 # Globals, constants, enumerations {{{0
 
@@ -31,24 +25,24 @@ h       Display keybind help (this list)
 F1      Render scene to a file
 Escape  Close simulation
 
-Built-in keyboard shortcuts:
-a       Toggle AABB
-c       Toggle drawing of contact points
+Built-in keyboard shortcuts (X = may not work):
+a       Toggle AABB (during wireframe)
+c   X   Toggle drawing of contact points
 d       Toggle deactivation
 g       Toggle rendering of the grid and GUI
-i       Pause simulation
-j       Toggle drawing of framerate
-k       Toggle drawing of constraints
-l       Toggle drawing of constraint limits
+i   X   Pause simulation
+j   X   Toggle drawing of framerate
+k   X   Toggle drawing of constraints
+l   X   Toggle drawing of constraint limits
 m       Toggle mouse picking
-o       Single-step simulation
+o   X   Single-step simulation
 p       Begin/end logging of timings
 s       Toggle shadow map
 v       Toggle rendering visual geometry
 w       Toggle wireframe drawing
 """
 
-# Default values for argument parsing
+# Default values for argument parsing (configurable)
 DFLT_OBJECTS = 10
 DFLT_RADIUS = 0.5
 DFLT_MASS = 1
@@ -56,6 +50,14 @@ DFLT_MASS = 1
 # Constants regarding camera movement
 DIR_POS = 1
 DIR_NEG = -1
+
+# Starting camera position and orientation
+CAM_START_PITCH = 340
+CAM_START_YAW = 0
+CAM_START_DIST = 25
+CAM_START_TARGET = np.zeros(3)
+
+# Default key step amounts (configurable)
 KEY_STEP_DIST = 0.25
 KEY_STEP_PITCH = 5
 KEY_STEP_YAW = 5
@@ -66,208 +68,194 @@ KEY_STEP_Z = 0.5
 # Time step (seconds) between subsequent config/input handling events
 INPUT_SLEEP = 0.05
 
-# Grace period to debounce keyboard events (intervals of INPUT_SLEEP)
-DEFAULT_GRACE_PERIOD = 20
-
-# Box size information
-BW = 0.5 # box width
-BL = 0.10 # box length
-BH = 0.15 # box height
-BD = 0.501 # box distance
-
-# Keyboard keys that result in camera movement
-MOVEMENT_KEYS = KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD_ARROWS + (p.B3G_KP_7, p.B3G_KP_9)
 # 0}}}
 
 class Simulation(BulletAppBase):
-  "Simulate interaction of objects in a box"
-  def __init__(self, n, *args, **kwargs): # {{{0
+  """
+  Simulate the interactions of various objects, with extensive configuration.
+  See Simulation.__init__ for configuration information.
+  """
+  def __init__(self, numObjects, *args, **kwargs): # {{{0
     """
+    Positional arguments:
+      numObjects      number of objects (sometimes order of magnitude)
+
     Extra keyword arguments: (see BulletAppBase.__init__ for more)
-      argv:           extra args to pass to pybullet.connect()
+      connectArgs:    extra args to pass to pybullet.connect()
       worldSize:      world scale (10)
+      worldSizeMax:   maximum world scale (100)
       objectRadius:   radius for each object (0.05)
       objectMass:     mass for each object (0.05)
-      walls:          add walls (False)
-      bricks:         add bricks (False, unless walls and spheres are False)
-      spheres:        add spheres (False)
       sphereZOffset:  starting minimum height for the spheres (10)
       wallThickness:  thickness of bounding-box walls (0.1)
       numBricks:      override (approximate) number of bricks (numObjects)
-      brickWidth:     width of each brick
-      brickLength:    length of each brick
-      brickHeight:    height of each brick
-      brickDist:      distance between bricks
-      brickScale:     brick scale factor (1)
-      brickLayers:    height of brick tower, in number of bricks (20)
+      brickWidth:     width of each brick (0.5)
+      brickLength:    length of each brick (0.1)
+      brickHeight:    height of each brick (0.15)
+      brickDist:      distance between bricks (0.5)
+      brickScale:     brick scale factor (2)
+      numBrickLayers: height of brick tower, in number of bricks (20)
+      wallAlpha:      default transparency of the box walls (0.1)
+
+    Extra keyword arguments for populating objects:
+      walls:          add walls (False)
+      bricks:         add bricks (False, identical to b1)
+      b1:             add bricks scenario 1 (False, identical to bricks)
+      b2:             add bricks scenario 2 (False)
+      b3:             add bricks scenario 3 (False)
+      projectile:     add projectile scenario (False)
+      pit:            add "ball pit" scenario (False)
+      bunny:          add bunny scenario (False)
+      fuzzy:          apply random jitter to certain scenarios (0.0)
+
+    Scenario-specific keyword arguments:
+      bouncy:         ("walls") make things bounce off the walls (False)
+      rand:           (various) adjust body velocities by +/- 1% (False)
+      projSpeed       ("projectile") speed of the projectiles (20)
+      bunnyZ          ("bunny") height of the bunny off the floor (5)
+      bunnySize       ("bunny") size mult of the bunny (2)
+      bunnyMass       ("bunny") mass of the bunny (objectMass * 10)
+
+    If b1, b2, and b3 are False, then "pit" is set to True.
+
+    The following debug inputs are applied only on resets (the backslash key):
+      numBricks
+      numBrickLayers
+      wallAlpha
+      sphereZOffset
+
+    Note: the following constraints should hold to avoid the simulation locking
+    up trying to calculate object motions. "<<" means "much less than" (as in,
+    by at least about an order of magnitude).
+      0 < numObjects
+      0 < numBricks
+      0 < objectRadius < worldSize
+      0 < brickWidth <= brickDist
+      0 < brickLength <= brickDist
+      0 < brickHeight <= brickDist
+      0 < brickScale
+      worldSize << worldSizeMax
     """
-    super(Simulation, self).__init__(*args, **kwargs)
-    self._spheres = set()
-    self._n = n
-    self._ws = getRemove(kwargs, "worldSize", 10, int)
-    self._sr = getRemove(kwargs, "objectRadius", 0.05, float)
-    self._sm = getRemove(kwargs, "objectMass", 0.05, float)
-    self._wt = getRemove(kwargs, "wallThickness", 0.1, float)
+    super(Simulation, self).__init__(
+        createBodyKwargs={"useMaximalCoordinates": True},
+        *args, **kwargs)
+    self._n = numObjects
+    self._ws = self.getArg("worldSize", 10, int)
+    self._wsmax = self.getArg("worldSizeMax", 100, int)
+    self._or = self.getArg("objectRadius", 0.05, float)
+    self._om = self.getArg("objectMass", 0.05, float)
+    self._wt = self.getArg("wallThickness", 0.1, float)
     # Brick size information
-    self._bw = getRemove(kwargs, "brickWidth", 0.5, float)
-    self._bl = getRemove(kwargs, "brickLength", 0.10, float)
-    self._bh = getRemove(kwargs, "brickHeight", 0.15, float)
-    self._bd = getRemove(kwargs, "brickDist", 0.5, float)
-    self._bs = getRemove(kwargs, "brickScale", 1, float)
+    self._bw = self.getArg("brickWidth", 0.5, float)
+    self._bl = self.getArg("brickLength", 0.1, float)
+    self._bh = self.getArg("brickHeight", 0.15, float)
+    self._bd = self.getArg("brickDist", 0.5, float)
+    self._bs = self.getArg("brickScale", 2, float)
     # Allow using a pre-existing server
     if not self.isConnected():
-      self.connect(getRemove(kwargs, "argv", None))
+      self.connect(kwargs.get("connectArgs", None))
     # Create parameters available in the GUI
-    self.addUserDebug("numObjects", 1, 100,
-        getRemove(kwargs, "numObjects", n, int))
-    self.addUserDebug("numBricks", 1, 100,
-        getRemove(kwargs, "numBricks", n, int))
-    self.addUserDebug("numBrickLayers", 1, 100,
-        getRemove(kwargs, "brickLayers", 20, int))
-    self.addUserDebug("wallAlpha", 0, 1, 0.1)
-    self.addUserDebug("worldSize", 2, 100, 10)
-    self.addUserDebug("sphereZOffset", 0, 20,
-        getRemove(kwargs, "sphereZOffset", 10, int))
+    self.addSlider("numBricks", 1, 100,
+        self.getArg("numBricks", self._n, int))
+    self.addSlider("numBrickLayers", 1, 100,
+        self.getArg("numBrickLayers", 20, int))
+    self.addSlider("wallAlpha", 0, 1,
+        self.getArg("wallAlpha", 0.1, float))
+    self.addSlider("sphereZOffset", 0, 20,
+        self.getArg("sphereZOffset", self._ws, int))
+  # 0}}}
+
+  def numObjects(self): # {{{0
+    "Requested number of objects"
+    return self._n
+  # 0}}}
+
+  def worldSize(self): # {{{0
+    "Value of the worldSize configuration option"
+    return self._ws
+  # 0}}}
+
+  def worldSizeMax(self): # {{{0
+    "Value of the worldSizeMax configuration option"
+    return self._wsmax
+  # 0}}}
+
+  def objectRadius(self): # {{{0
+    "Value of the objectRadius configuration option"
+    return self._or
+  # 0}}}
+
+  def objectMass(self): # {{{0
+    "Value of the objectMass configuration option"
+    return self._om
+  # 0}}}
+
+  def wallThickness(self): # {{{0
+    "Value of the wallThickness configuration option"
+    return self._wt
+  # 0}}}
+
+  def brickWidth(self): # {{{0
+    "Value of the brickWidth configuration option"
+    return self._bw
+  # 0}}}
+
+  def brickLength(self): # {{{0
+    "Value of the brickLength configuration option"
+    return self._bl
+  # 0}}}
+
+  def brickHeight(self): # {{{0
+    "Value of the brickHeight configuration option"
+    return self._bh
+  # 0}}}
+
+  def brickDist(self): # {{{0
+    "Value of the brickDist configuration option"
+    return self._bd
+  # 0}}}
+
+  def brickScale(self): # {{{0
+    "Value of the brickScale configuration option"
+    return self._bs
   # 0}}}
 
   def worldFloor(self): # {{{0
-    "Returns a vector at the center of the world's floor"
+    """
+    Returns a vector at the center of the world's floor (determined by the
+    walls being centered about the origin)
+    """
     return np.array([0, 0, -self._ws + self._wt])
   # 0}}}
 
-  def _addWorldPlane(self): # {{{0
-    self._plane = self.createBox([100, 100, 0], self.worldFloor(), [0, 0, 0, 0])
+  def worldXMin(self): # {{{0
+    "Left-most x value still considered inside the world"
+    return self._wt - self._ws
   # 0}}}
 
-  def _addWorldTray(self): # {{{0
-    self._tray = self.addURDF("data/tray/traybox.urdf")
+  def worldXMax(self): # {{{0
+    "Right-most x value still considered inside the world"
+    return self._ws - self._wt
   # 0}}}
 
-  def _addWorldWalls(self): # {{{0
-    """
-    Create walls around the ball pit
-
-    Walls enclose a cube with side length self._ws centered around 0, 0, with
-    the bottom face co-planar to the world plane.
-
-    Available interior area is exactly
-      -(self._ws - self._wt) < {x,y,z} < self._ws - self._wt
-    """
-    alpha = self.getUserDebug("wallAlpha")
-    wt = np.float(self._wt)
-    ws = np.float(self._ws)
-    wallcx = np.array([wt, ws+wt, ws+wt]) # wall x collision along y axis
-    wallcy = np.array([ws+wt, wt, ws+wt]) # wall y collision along x axis
-    wallcz = np.array([ws+wt, ws+wt, wt]) # wall z collision
-    self.createBox(wallcx, np.array([ws, 0, 0]), rgba=withAlpha(C3_RED, alpha))
-    self.createBox(wallcx, np.array([-ws, 0, 0]), rgba=withAlpha(C3_BLU, alpha))
-    self.createBox(wallcy, np.array([0, ws, 0]), rgba=withAlpha(C3_GRN, alpha))
-    self.createBox(wallcy, np.array([0, -ws, 0]), rgba=withAlpha(C3_MAG, alpha))
-    self.createBox(wallcz, np.array([0, 0, ws]), rgba=withAlpha(C3_GRN, alpha))
-    self.createBox(wallcz, np.array([0, 0, -ws]), rgba=withAlpha(C3_BLU, alpha))
-
-    # Ground plane
-    gp = [10*ws+wt, 10*ws+wt, wt]
-    self.createBox(gp, np.array([0, 0, -ws]), rgba=[0, 0, 0, 0])
+  def worldYMin(self): # {{{0
+    "North-most y value still considered inside the world"
+    return self._wt - self._ws
   # 0}}}
 
-  def _addBricksVersion1(self, layers, num): # {{{0
-    "Add bricks in an alternating tower"
-    n = int(round(num**0.5))
-    bw = self._bw * self._bs
-    bl = self._bl * self._bs
-    bh = self._bh * self._bs
-    bd = self._bd * self._bs
-    box1 = np.array([bw/2, bl/2, bh/2])
-    box2 = np.array([bl/2, bw/2, bh/2])
-    bx = lambda num: bd * (num + (1-n)/2)
-    by = lambda num: bd * (num + (1-n)/2)
-    bz = lambda num: num * bh
-    boxes = []
-    for i in range(n):
-      for j in range(n):
-        for k in range(layers):
-          boxes.append((box1, [bx(i), by(j), bz(2*k)]))
-          boxes.append((box2, [bx(i), by(j), bz(2*k+1)]))
-    return boxes
+  def worldYMax(self): # {{{0
+    "South-most y value still considered inside the world"
+    return self._ws - self._wt
   # 0}}}
 
-  def _addBricksVersion2(self, layers, num): # {{{0
-    "Add bricks like version 1, but with alternating platforms"
-    n = int(round(num**0.5))
-    bw = self._bw * self._bs
-    bl = self._bl * self._bs
-    bh = self._bh * self._bs
-    bd = self._bd * self._bs
-    box1 = np.array([bw/2, bl/2, bh/2])
-    box2 = np.array([bl/2, bw/2, bh/2])
-    box3 = np.array([n*bd/2, n*bd/2, bh/2])
-    bx = lambda num: bd * (num + (1-n)/2)
-    by = lambda num: bd * (num + (1-n)/2)
-    bz = lambda num: num * bh
-    boxes = []
-    for k in range(layers/2):
-      for i in range(n):
-        for j in range(n):
-          boxes.append((box1, [bx(i), by(j), bz(3*k)]))
-          boxes.append((box2, [bx(i), by(j), bz(3*k+1)]))
-      boxes.append((box3, [0, 0, bz(3*k+2)]))
-    return boxes
+  def worldZMin(self): # {{{0
+    "Bottom-most z value still considered inside the world"
+    return self.worldFloor()[2]
   # 0}}}
 
-  def _addBricksVersion3(self, layers, num): # {{{0
-    "Add pillars"
-    n = int(num)
-    bw = self._bw * self._bs / 2
-    bl = self._bl * self._bs / 2
-    bh = self._bh * self._bs * 2
-    bd = self._bd * self._bs
-    box1 = np.array([bw/2, bl/2, bh/2])
-    box2 = np.array([bl/2, bw/2, bh/2])
-    bx = lambda num: bd * (num + (1-n)/2)
-    by = lambda num: bd * (num + (1-n)/2)
-    bz = lambda num: num * bh + bh/2
-    boxes = []
-    c = 0
-    cs = [box1, box2]
-    for k in range(layers):
-      for i in range(n):
-        for j in range(n):
-          boxes.append((cs[c], [bx(i), by(j), bz(k)]))
-          c = (c + 1) % 2
-    return boxes
-  # 0}}}
-
-  def _addBricks(self): # {{{0
-    "Add bricks to the simulation"
-    layers = int(round(self.getUserDebug("numBrickLayers")))
-    num = int(round(self.getUserDebug("numBricks")))
-    # Create a temp list because self.createBox is expensive and (somehow)
-    # increases the cost of everything in the loop with it
-    if self._hasArg("v2"):
-      boxes = self._addBricksVersion2(layers=layers, num=num)
-    elif self._hasArg("v3"):
-      boxes = self._addBricksVersion3(layers=layers, num=num)
-    else:
-      boxes = self._addBricksVersion1(layers=layers, num=num)
-    boxBasePos = self.worldFloor()
-    boxMass = self._sm/2
-    for bc, bp in boxes:
-      self.createBox(bc, boxBasePos + bp, mass=boxMass)
-  # 0}}}
-
-  def _addSpheres(self): # {{{0
-    self._spColl = self.createCollision(p.GEOM_SPHERE, self._sr)
-    offset = np.array([0, 0, self.getUserDebug("sphereZOffset")])
-    for i in range(self._n):
-      sxyz = np.array([
-        random.uniform(-0.01, 0.01),
-        random.uniform(-0.01, 0.01),
-        2 * self._sr * i + random.random() * self._sr
-      ]) + self.worldFloor() + offset
-      s = self.createSphere(self._sm, sxyz, self._sr)
-      p.resetBaseVelocity(s, linearVelocity=[0, 0, -10])
-      self._spheres.add(s)
+  def worldZMax(self): # {{{0
+    "Top-most z value still considered inside the world"
+    return -self.worldFloor()[2]
   # 0}}}
 
   def _addAxes(self): # {{{0
@@ -278,48 +266,97 @@ class Simulation(BulletAppBase):
       self.drawLine(self.worldFloor(), pt, color=CAM_AXIS_COLORS[aname])
   # 0}}}
 
+  def _addGrid(self): # {{{0
+    "Draw a grid on the world floor"
+    wm = self.worldSizeMax()
+    for i in range(int(round(wm))):
+      # Draw a line from (-wm, i) to (wm, i)
+      p1 = self.worldFloor() + np.array([-wm, i, 0])
+      p2 = self.worldFloor() + np.array([wm, i, 0])
+      self.drawLine(p1, p2, color=C_NONE)
+      # Draw a line from (-wm, -i) to (wm, -i)
+      p1 = self.worldFloor() + np.array([-wm, -i, 0])
+      p2 = self.worldFloor() + np.array([wm, -i, 0])
+      self.drawLine(p1, p2, color=C_NONE)
+      # Draw a line from (i, -wm) to (i, wm)
+      p1 = self.worldFloor() + np.array([i, -wm, 0])
+      p2 = self.worldFloor() + np.array([i, wm, 0])
+      self.drawLine(p1, p2, color=C_NONE)
+      # Draw a line from (-i, -wm) to (-i, wm)
+      p1 = self.worldFloor() + np.array([-i, -wm, 0])
+      p2 = self.worldFloor() + np.array([-i, wm, 0])
+      self.drawLine(p1, p2, color=C_NONE)
+  # 0}}}
+
   def _addObjects(self): # {{{0
     "Add all configured objects to the world"
-    self._addWorldPlane()
-    walls = self._getArg("walls")
-    bricks = self._getArg("bricks")
-    spheres = self._getArg("spheres")
-    if any((walls, bricks, spheres)):
-      if self._getArg("walls"):
-        self._addWorldWalls()
-      if self._getArg("bricks"):
-        self._addBricks()
-      if self._getArg("spheres"):
-        self._addSpheres()
-    else:
-      self._addBricks()
-    if self._getArg("axes") or self._debug:
+    scs = [EmptyPlaneScenario()]
+    wantWalls = self.getArg("walls")
+    wantBricks1 = self.getArg("bricks") or self.getArg("b1")
+    wantBricks2 = self.getArg("b2")
+    wantBricks3 = self.getArg("b3")
+    wantBricksAny = wantBricks1 or wantBricks2 or wantBricks3
+    wantProjectile = self.getArg("projectile")
+    wantPit = self.getArg("pit")
+    wantBunny = self.getArg("bunny")
+    wantRandom = self.getArg("fuzzy")
+    if wantWalls:
+      scs.append(BoxedScenario())
+    if wantPit or not wantBricksAny:
+      scs.append(BallpitScenario())
+    if wantBricks1:
+      scs.append(BrickTower1Scenario())
+    if wantBricks2:
+      scs.append(BrickTower2Scenario())
+    if wantBricks3:
+      scs.append(BrickTower3Scenario())
+    if wantProjectile:
+      scs.append(ProjectileScenario(
+        rand=wantRandom,
+        projShape=self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int),
+        projSize=self.getArg("projSize", self.objectRadius()/2, float),
+        velCoeff=self.getArg("projSpeed", 20, float)))
+    if wantBunny:
+      scs.append(BunnyScenario(
+        rand=wantRandom,
+        bunnyZ=self.getArg("bunnyZ", 5, float),
+        bunnySize=self.getArg("bunnySize", 2, float),
+        bunnyMass=self.getArg("bunnyMass", self.objectMass() * 10, float)))
+    for sc in scs:
+      sc.setup(self)
+
+    if self.getArg("axes") or self._debug:
       self._addAxes()
+    if self.getArg("grid"):
+      self._addGrid()
   # 0}}}
 
   def reset(self): # {{{0
-    """
-    Reset the entire simulation
-    """
+    "Reset the entire simulation"
     self.debug("Resetting simulation")
     super(Simulation, self).reset()
-    self._n = self.getUserDebug("numObjects", int)
-    self._ws = self.getUserDebug("worldSize")
     self.setRealTime(False)
     self.setRendering(False)
     self.updateGravity()
     self._addObjects()
     self.setRendering(True)
-    self.setRealTime(True)
+    if not self.getArg("frozen"):
+      self.setRealTime(True)
   # 0}}}
 
   def tick(self): # {{{0
+    "Apply continuous information from the user debug inputs"
     self.updateGravity()
+  # 0}}}
+
+  def stepSim(self): # {{{0
+    "Advance the simulation by one step"
+    p.stepSimulation()
   # 0}}}
 
 def onHelpKey(app): # {{{0
   "Print help information"
-  sys.stderr.write(KEYBIND_HELP_TEXT)
+  p.b3Print(KEYBIND_HELP_TEXT.rstrip())
 # 0}}}
 
 def onStatusKey(app, keys): # {{{0
@@ -328,7 +365,7 @@ def onStatusKey(app, keys): # {{{0
     c = formatVec(app.getCameraPos())
     o = formatVec([app.getPitch(), app.getYaw(), app.getDistanceToTarget()])
     t = formatVec(app.getTargetPos())
-    sys.stderr.write(u"""Camera position, camera orientation, target position:
+    s = u"""Camera position, camera orientation, target position:
 cxyz: {camera}
 c{theta}{phi}{delta}: {orientation}
 txyz: {target}
@@ -337,7 +374,8 @@ txyz: {target}
            target=t,
            theta=GREEK_LOWER_THETA,
            phi=GREEK_LOWER_PHI,
-           delta=GREEK_LOWER_DELTA))
+           delta=GREEK_LOWER_DELTA)
+    p.b3Print(s.encode("UTF-8").rstrip())
 # 0}}}
 
 def onMovementKey(app, keys): # {{{0
@@ -355,39 +393,39 @@ def onMovementKey(app, keys): # {{{0
       "enable": anyPressed(keys, p.B3G_UP_ARROW, p.B3G_DOWN_ARROW) \
           and not isPressed(keys, p.B3G_ALT) \
           and isPressed(keys, p.B3G_CONTROL),
-      "step": KEY_STEP_PITCH,
+      "step": app.getArg("cdp"),
       "dir": getDir(p.B3G_UP_ARROW, p.B3G_DOWN_ARROW),
       "fast": False
     },
     CAM_AXIS_YAW: {
       "enable": anyPressed(keys, p.B3G_LEFT_ARROW, p.B3G_RIGHT_ARROW) \
           and not isPressed(keys, p.B3G_ALT),
-      "step": KEY_STEP_YAW,
+      "step": app.getArg("cdy"),
       "dir": getDir(p.B3G_LEFT_ARROW, p.B3G_RIGHT_ARROW),
     },
     CAM_AXIS_DIST: {
       "enable": not isPressed(keys, p.B3G_CONTROL) \
           and anyPressed(keys, p.B3G_UP_ARROW, p.B3G_DOWN_ARROW) \
           and not isPressed(keys, p.B3G_ALT),
-      "step": KEY_STEP_DIST,
+      "step": app.getArg("cdd"),
       "dir": getDir(p.B3G_UP_ARROW, p.B3G_DOWN_ARROW),
       "fast": isPressed(keys, p.B3G_SHIFT)
     },
     CAM_AXIS_X: {
       "enable": anyPressed(keys, p.B3G_KP_4, p.B3G_KP_6),
-      "step": KEY_STEP_X,
+      "step": app.getArg("cdtx"),
       "dir": getDir(p.B3G_KP_4, p.B3G_KP_6),
       "fast": isPressed(keys, p.B3G_SHIFT)
     },
     CAM_AXIS_Y: {
       "enable": anyPressed(keys, p.B3G_KP_2, p.B3G_KP_8),
-      "step": KEY_STEP_Y,
+      "step": app.getArg("cdty"),
       "dir": getDir(p.B3G_KP_2, p.B3G_KP_8),
       "fast": isPressed(keys, p.B3G_SHIFT)
     },
     CAM_AXIS_Z: {
       "enable": anyPressed(keys, p.B3G_KP_7, p.B3G_KP_9),
-      "step": KEY_STEP_Z,
+      "step": app.getArg("cdtz"),
       "dir": getDir(p.B3G_KP_7, p.B3G_KP_9),
       "fast": isPressed(keys, p.B3G_SHIFT)
     },
@@ -400,7 +438,7 @@ def onMovementKey(app, keys): # {{{0
       if rules.get("fast"):
         dv *= 10
       movement[axis] = movement.get(axis, 0) + dv
-  app.moveCameraBy(**movement)
+  app.moveCamera(**movement)
   # NUMPAD_5 resets the camera target to the world floor
   if isPressed(keys, p.B3G_KP_5):
     app.setTargetPos(app.worldFloor())
@@ -409,10 +447,7 @@ def onMovementKey(app, keys): # {{{0
 def onToggleCov(app, covname, dflt=False): # {{{0
   "Callback: toggle a debug configuration option"
   cov = B3.getCovByName(covname)
-  v = not app.get(cov, dflt)
-  sys.stderr.write("Setting {} to {}\n".format(covname, v))
-  p.configureDebugVisualizer(cov, 1 if v else 0)
-  app.set(cov, v)
+  app.toggleCov(cov)
 # 0}}}
 
 def mainLoop(args, a, kbm): # {{{0
@@ -446,36 +481,61 @@ if __name__ == "__main__": # {{{0
   if sys.flags.interactive and "PYTHONSTARTUP" in os.environ:
     execfile(os.environ["PYTHONSTARTUP"])
 
-  # Parse arguments {{{1
+  # Parse arguments
   parser = argparse.ArgumentParser(
       usage="%(prog)s [options] [pybullet-options]",
-      epilog="All unhandled arguments are passed to pybullet as-is",
+      epilog="""
+All unhandled arguments are passed to pybullet as-is. The -c argument can be
+used more than once. For --cam, "Df" means "default value". Passing --noloop
+will prevent some keybinds (pause, reset) from working.
+""",
       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+  parser.add_argument("--keys-help", action="store_true",
+                      help="print keybind help information and exit")
   parser.add_argument("-n", dest="num", metavar="N", type=int, default=DFLT_OBJECTS,
                       help="number of objects (general magnitude)")
   parser.add_argument("-r", dest="radius", metavar="R", type=float, default=DFLT_RADIUS,
                       help="object radius/size (general magnitude)")
   parser.add_argument("-m", dest="mass", metavar="M", type=float, default=DFLT_MASS,
                       help="object mass (general magnitude)")
-  parser.add_argument("--gui", action="store_true", help="start with the GUI visible")
-  parser.add_argument("--help-keys", action="store_true", help="print keybinds")
+  parser.add_argument("-g", "--gui", action="store_true",
+                      help="start with the GUI visible")
+  parser.add_argument("-f", "--frozen", action="store_true",
+                      help="start with the simulation frozen")
   parser.add_argument("-c", dest="config", action="append", metavar="KEY[=VAL]",
-                      help="set simulation configuration option(s); can be " +
-                           "used more than once")
-  parser.add_argument("--debug", action="store_true", help="print debug information")
-  parser.add_argument("--noloop", action="store_true", help="don't enter the main loop")
+                      help="set simulation configuration option(s)")
+  parser.add_argument("--cam", metavar="P,Y,D,Tx,Ty,Tz", default="Df,Df,Df,Df,Df,Df",
+                      help="set starting camera position and orientation")
+  parser.add_argument("--cdp", metavar="NUM", type=float, default=KEY_STEP_PITCH,
+                      help="camera movement step: camera pitch")
+  parser.add_argument("--cdy", metavar="NUM", type=float, default=KEY_STEP_YAW,
+                      help="camera movement step: camera yaw")
+  parser.add_argument("--cdd", metavar="NUM", type=float, default=KEY_STEP_DIST,
+                      help="camera movement step: distance from camera to target")
+  parser.add_argument("--cdtx", metavar="NUM", type=float, default=KEY_STEP_X,
+                      help="camera movement step: target x coordinate")
+  parser.add_argument("--cdty", metavar="NUM", type=float, default=KEY_STEP_Y,
+                      help="camera movement step: target y coordinate")
+  parser.add_argument("--cdtz", metavar="NUM", type=float, default=KEY_STEP_Z,
+                      help="camera movement step: target z coordinate")
+  parser.add_argument("--noloop", action="store_true",
+                      help="don't enter the main loop (for interactive scripting)")
+  parser.add_argument("--debug", action="store_true",
+                      help="output quite a bit of debugging information")
   args, remainder = parser.parse_known_args()
-  if args.help_keys:
+  if args.keys_help:
     parser.print_help()
     sys.stderr.write("\n")
     sys.stderr.write(KEYBIND_HELP_TEXT)
     raise SystemExit(0)
-  if not args.gui:
-    remainder.append("--nogui")
-  # 1}}}
 
-  # Determine the arguments to pass to the simulation class {{{1
-  extraArgs = " ".join(remainder)
+  # Determine the arguments to pass to pybullet.connect
+  simArgs = []
+  if not args.gui:
+    simArgs.append("--nogui")
+  simArgs.extend(remainder)
+
+  # Determine the arguments to pass to the simulation class
   extraKwargs = {}
   if args.config is not None:
     for val in args.config:
@@ -486,41 +546,56 @@ if __name__ == "__main__": # {{{0
         extraKwargs[val] = True
   if args.debug:
     extraKwargs["debug"] = True
+  if args.frozen:
+    extraKwargs["frozen"] = True
   if args.radius is not None:
     extraKwargs["objectRadius"] = args.radius
   if args.mass is not None:
     extraKwargs["objectMass"] = args.mass
-  # 1}}}
+  extraKwargs["cdp"] = args.cdp
+  extraKwargs["cdy"] = args.cdy
+  extraKwargs["cdd"] = args.cdd
+  extraKwargs["cdtx"] = args.cdtx
+  extraKwargs["cdty"] = args.cdty
+  extraKwargs["cdtz"] = args.cdtz
+  extraKwargs["connectArgs"] = " ".join(simArgs)
 
   # Construct the simulation
-  app = a = Simulation(n=args.num, argv=extraArgs, **extraKwargs)
-  # Set the starting camera location to look at the world floor
-  a.setCamera(pitch=305, yaw=0, distance=10, target=app.worldFloor())
+  app = a = Simulation(numObjects=args.num, **extraKwargs)
+
+  # Parse and apply the --cam argument
+  cinfo = parseCameraSpec(args.cam,
+                          CAM_START_PITCH,
+                          CAM_START_YAW,
+                          CAM_START_DIST,
+                          CAM_START_TARGET)
+  camPitch, camYaw, camDist, camTarget = cinfo
+  a.setCamera(pitch=camPitch, yaw=camYaw, distance=camDist, target=camTarget)
   # Start the simulation
   a.reset()
 
   # Hide the preview windows as they're completely unused
-  p.configureDebugVisualizer(p.COV_ENABLE_RGB_BUFFER_PREVIEW, 0)
-  p.configureDebugVisualizer(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, 0)
-  p.configureDebugVisualizer(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, 0)
+  app.toggleCov(p.COV_ENABLE_RGB_BUFFER_PREVIEW, False)
+  app.toggleCov(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, False)
+  app.toggleCov(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, False)
 
-  # Bind various keys (camera movement, toggles, help, etc) {{{1
+  # Bind various keys (camera movement, toggles, help, etc)
   kbm = KeyPressManager(a, debug=args.debug)
   kbm.bind(p.B3G_SPACE, a.reset)
-  kbm.bindAll(MOVEMENT_KEYS + (p.B3G_KP_5,),
+  kbm.bindAll(KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD,
               lambda keys: onMovementKey(a, keys),
               wantKeyInfo=True,
               on=p.KEY_IS_DOWN | p.KEY_WAS_TRIGGERED)
   kbm.bind("h", onHelpKey, funcArgs=(a,))
   kbm.bind("/", lambda keys: onStatusKey(a, keys), wantKeyInfo=True)
+  kbm.bind(".", a.stepSim, on=p.KEY_IS_DOWN | p.KEY_WAS_TRIGGERED)
   kbm.bind("m", onToggleCov,
            funcArgs=(a, "ENABLE_MOUSE_PICKING"),
            funcKwargs={"dflt": True})
   kbm.bind("`", onToggleCov,
            funcArgs=(a, "ENABLE_KEYBOARD_SHORTCUTS"),
            funcKwargs={"dflt": True})
-  kbm.bind("\\", a.toggleSim, timeoutPeriod=0)
-  # 1}}}
+  kbm.bind("\\", a.toggleSim)
 
   # Process events until the server closes
   if not args.noloop:
