@@ -4,14 +4,13 @@ import argparse
 import random
 import sys
 import time
+import numpy as np
 from pyb3 import pybullet as p
 from bulletbase import B3, BulletAppBase
 from utility import *
 from keypressmgr import *
 from greek import *
 from scenarios import *
-
-import numpy as np
 
 # Globals, constants, enumerations {{{0
 
@@ -163,6 +162,8 @@ class Simulation(BulletAppBase):
         self.getArg("wallAlpha", 0.1, float))
     self.addSlider("sphereZOffset", 0, 20,
         self.getArg("sphereZOffset", self._ws, int))
+    # TODO: REMOVE
+    self._button = p.addUserDebugButton("testButton", True)
   # 0}}}
 
   def numObjects(self): # {{{0
@@ -347,11 +348,9 @@ class Simulation(BulletAppBase):
   def tick(self): # {{{0
     "Apply continuous information from the user debug inputs"
     self.updateGravity()
-  # 0}}}
-
-  def stepSim(self): # {{{0
-    "Advance the simulation by one step"
-    p.stepSimulation()
+    b = p.readUserDebugParameter(self._button)
+    if b != 0:
+      print(b)
   # 0}}}
 
 def onHelpKey(app): # {{{0

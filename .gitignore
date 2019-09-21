@@ -4,7 +4,11 @@
 .*.swp
 .*.swo
 old/
+*.a
+*.o
+*.so
 
 # FFI modules
 exmod.*
 xkeys.*
+printf.*

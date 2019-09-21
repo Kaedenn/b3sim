@@ -69,6 +69,13 @@ Recommended usage is one of the following:
 #
 # Commands are handled in
 #   examples/SharedMemory/PhysicsServerCommandProcessor.cpp
+#
+###############################################################################
+#
+# PhysicsServerExample:
+#   m_guiHelper: GUIHelperInterface
+#   GUIHelperInterface::m_multiThreadedHelper: MultiThreadedOpenGLGuiHelper
+#
 # 0}}}
 
 __all__ = ["pybullet", "libc"]
@@ -137,8 +144,9 @@ def polyfill_b3Print(msg, eol="\n"):
   if eol:
     sys.stdout.write(eol)
 
-def polyfill_b3Printf(msg, *args):
+def polyfill_b3Printf(fmt, *args):
   "Polyfilled b3Printf function implemented in pure Python"
+  from _printf import ffi, lib
   try:
     b3Print = pybullet.b3Print
   except AttributeError:

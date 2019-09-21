@@ -4,16 +4,15 @@
 Base and utility classes for a pybullet simulation
 """
 
-# See the bottom of the file for __all__
-
-# BulletAppBase TODO:
-# Provide way to set common API parameters?
-#   createBodyArgs, createBodyKwargs
-#   createCollisionArgs, createCollisionKwargs
-#   createVisualShapeArgs, createVisualShapeKwargs
+# TODO:
+# readUserDebugButton
+# clearUserDebugButton (or some way to reset it)
 
 from pyb3 import pybullet as p
 from utility import *
+
+# Only export the classes, not the modules
+__all__ = ["B3", "BulletAppBase"]
 
 class B3(object): # {{{0
   "Bullet constants and functions for those constants"
@@ -118,11 +117,16 @@ def _merge(v1, v2): # {{{0
   return v
 # 0}}}
 
+def _or(v, d): # {{{0
+  "Either v or d, whichever is not None first"
+  if v is not None:
+    return v
+  return d
+# 0}}}
+
 class BulletAppBase(object): # {{{0
-  """
-  Base class for pybullet simulations
-  """
-  def __init__(self, connect=False,
+  "Base class for pybullet simulations"
+  def __init__(self, connect=False, # {{{1
                connectArgs=None,
                connectKwargs=None,
                createBodyArgs=None,
@@ -131,7 +135,7 @@ class BulletAppBase(object): # {{{0
                createCollisionKwargs=None,
                createVisualShapeArgs=None,
                createVisualShapeKwargs=None,
-               **kwargs): # {{{1
+               **kwargs):
     """
     Extra keyword arguments:
       debug:        enable some debug output (False)
@@ -152,7 +156,6 @@ class BulletAppBase(object): # {{{0
     self._covValues = {}
     self._debugConfigs = {}
     self._args = kwargs
-    _or = lambda v, d: v if v is not None else d
     self._connectArgs = (
         _or(connectArgs, ()),
         _or(connectKwargs, {}))
@@ -202,7 +205,7 @@ class BulletAppBase(object): # {{{0
     return val
   # 1}}}
 
-  def _do_connect(self, method, args): # {{{1
+  def _do_connect(self, method, args=None): # {{{1
     "Private: connect to the Bullet server"
     if args is None:
       result = p.connect(method)
@@ -233,13 +236,15 @@ class BulletAppBase(object): # {{{0
     self.addSlider("gravityZ", -10, 10, self._defaultGravity["z"])
   # 1}}}
 
-  def saveBullet(self, fname):
+  def saveBullet(self, fname): # {{{1
     "Save a snapshot of the world"
     app.saveBullet(fname)
+  # 1}}}
 
-  def loadBullet(self, fname):
+  def loadBullet(self, fname): # {{{1
     "Load a snapshot of the world"
     app.loadBullet(fname)
+  # 1}}}
 
   def addSlider(self, name, min, max, dflt=None): # {{{1
     "Add user debug parameter"
@@ -257,7 +262,7 @@ class BulletAppBase(object): # {{{0
 
   def addButton(self, name, state=False): # {{{1
     "Add a button parameter"
-    self._debugConfigs[name] = p.addUserDebugButton(name)
+    self._debugConfigs[name] = p.addUserDebugButton(name, isTrigger=state)
     self.debug("addButton({!r})".format(name))
   # 1}}}
 
@@ -313,11 +318,17 @@ class BulletAppBase(object): # {{{0
   # 1}}}
 
   def toggleSim(self): # {{{1
+    "Toggle real-time simulation"
     s = p.getPhysicsEngineParameters()
     if s["useRealTimeSimulation"]:
       self.setRealTime(False)
     else:
       self.setRealTime(True)
+  # 1}}}
+
+  def stepSim(self): # {{{1
+    "Advance the simulation by one step"
+    p.stepSimulation()
   # 1}}}
 
   def getCamera(self, val=None): # {{{1
@@ -632,9 +643,6 @@ class BulletAppBase(object): # {{{0
     p.addUserDebugText(t, pt, **kwargs)
   # 1}}}
 # 0}}}
-
-# Only export the classes, not the modules
-__all__ = ["B3", "BulletAppBase"]
 
 # vim: set ts=2 sts=2 sw=2 et:
 

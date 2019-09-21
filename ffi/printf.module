@@ -1,0 +1,30 @@
+
+# "printf" module
+# This module exports the ubiquitous "printf" family of functions.
+
+{
+  "name": "printf",
+  "cdef": """
+int printf(const char* format, ...);
+int sprintf(char* buffer, const char* format, ...);
+int snprintf(char* buffer, size_t size, const char* format, ...);
+int sprintf_size(const char* format, ...);
+""",
+  "code": """
+#include <stdio.h>
+
+int sprintf_size(const char* format, ...) {
+  char tmp_buf[8] = {0};
+  int nchars = 0;
+  va_list args;
+  va_start(args, format);
+  nchars = vsnprintf(tmp_buf, 8, format, args);
+  va_end(args);
+  return nchars;
+}
+""",
+  "extra_args": (),
+  "extra_kwargs": {}
+}
+
+# vim: set ts=2 sts=2 sw=2 et:

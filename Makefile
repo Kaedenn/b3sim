@@ -1,11 +1,14 @@
 
 SRCFILES = $(wildcard *.py)
 
-FFI_MODULES = $(wildcard ffi/*.module) xkeys
+FFI_MODULES = xkeys $(wildcard ffi/*.module)
 
-.PHONY: all clean distclean setup ffi
+.PHONY: all ffi clean distclean
 
 all: ffi
+
+ffi:
+	python ffi/build.py $(FFI_MODULES)
 
 clean:
 	-rm *.pyc
@@ -15,8 +18,3 @@ distclean:
 	-rm *.pyc
 	python ffi/build.py -a distclean $(FFI_MODULES)
 
-setup: setup.sh
-	$(SHELL) setup.sh
-
-ffi:
-	python ffi/build.py $(FFI_MODULES)

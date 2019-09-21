@@ -10,6 +10,14 @@ Axes:
   -Y is north
   +Z is up
   -Z is down
+
+Vector128 dtype:
+d = np.dtype((np.float128, np.dtype({"names": list("xyzw"), "formats": [np.float32]*4})))
+a = np.array([0], dtype=d)
+
+a[0] = <float128 value>
+a['x'][0] = <float32 x coordinate>
+
 """
 
 from pyb3 import pybullet as p
@@ -64,10 +72,6 @@ def norm(v):
 def unit(v):
   "Convert v to a unit vector"
   return np.divide(v, norm(v))
-
-def deg2rad(d):
-  "Convert degrees to radians"
-  return d / 360 * np.pi
 # 0}}}
 
 # Camera/axis constants {{{0

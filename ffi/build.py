@@ -18,6 +18,12 @@ extra_args: (optional) additional positional arguments to pass to set_source()
 extra_kwargs: (optional) additional keyword arguments to pass to set_source()
 
 For an example, see ffi/example.module.
+
+The following special modules are available:
+  xkeys   Export a significant number of Key_* constants, from X11/keysymdef.h.
+
+Special modules are generated upon request, rather than from a module file.
+This allows far more flexibility in generating a large amount of identifiers.
 """
 
 import argparse
@@ -26,12 +32,20 @@ import logging
 import os
 import sys
 
+import cffi
+FFI = cffi.FFI
+
 LOGGING_FORMAT = "%(levelname)s: %(message)s"
 logging.basicConfig(format=LOGGING_FORMAT, level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-import cffi
-from cffi import FFI
+def get_remove(d, k, dflt=None):
+  "Obtain and remove a key from a dict"
+  if k in d:
+    v = d[k]
+    del d[k]
+    return v
+  return dflt
 
 def retab(text):
   "Replaces tabs with eight spaces"
@@ -39,28 +53,25 @@ def retab(text):
 
 def compile_module(name, cdef, code, *args, **kwargs):
   "Compile an FFI module into a Python module"
-  verbose = False
-  if "verbose" in kwargs:
-    verbose = kwargs["verbose"]
-    del kwargs["verbose"]
+  verbose = get_remove(kwargs, "verbose", False)
+  tmpdir = get_remove(kwargs, "tmpdir", os.getcwd())
   ffibuilder = FFI()
   if cdef:
     ffibuilder.cdef(cdef)
-  if verbose:
-    sys.stderr.write("Compiling module {}:\n".format(name))
-    sys.stderr.write("Module cdefs:\n")
-    for lnr, line in enumerate(cdef.splitlines()):
-      if len(line.strip()) > 0:
-        sys.stderr.write("{:04d}\t{}\n".format(lnr, line))
-    sys.stderr.write("Module source:\n")
-    for lnr, line in enumerate(code.splitlines()):
-      if len(line.strip()) > 0:
-        sys.stderr.write("{:04d}\t{}\n".format(lnr, line))
+  logger.debug("Compiling module {}:".format(name))
+  logger.debug("Module cdefs:")
+  for lnr, line in enumerate(cdef.splitlines()):
+    if len(line.strip()) > 0:
+      logger.debug("{:04d}\t{}".format(lnr, line))
+  logger.debug("Module source:")
+  for lnr, line in enumerate(code.splitlines()):
+    if len(line.strip()) > 0:
+      logger.debug("{:04d}\t{}".format(lnr, line))
   ffibuilder.set_source(name, code, *args, **kwargs)
-  ffibuilder.compile(verbose=verbose)
+  ffibuilder.compile(verbose=verbose, tmpdir=tmpdir)
 
 def parse_module(modfile):
-  "Parse .module file, returning its name, code, args, and kwargs"
+  "Parse .module file, returning name, code, args, and kwargs"
   module = open(modfile).read()
   moddef = ast.literal_eval(module)
   logger.debug("Parsed module: {!r}".format(moddef))
@@ -102,11 +113,11 @@ if __name__ == "__main__":
   p = argparse.ArgumentParser(epilog="""
 The following special modules are available: "xkeys".
   """)
-  p.add_argument("module", nargs="+",
-                 help="module to compile (path or special module name)")
+  ACTIONS = ("build", "clean", "distclean", "list")
+  p.add_argument("module", nargs="+", help="module to compile (path or special module name)")
+  p.add_argument("-a", "--action", choices=ACTIONS, default="build", help="action to take")
   p.add_argument("-v", "--verbose", action="store_true", help="verbose output")
-  p.add_argument("-a", "--action", choices=("build", "clean", "distclean", "list"),
-                 default="build", help="action to take")
+  p.add_argument("-t", default=os.path.dirname(sys.argv[0]), help="temporary directory")
   args = p.parse_args()
   modules = []
   if args.verbose:
@@ -122,8 +133,10 @@ The following special modules are available: "xkeys".
     try:
       modules.append(parse_module(modfile))
     except KeyError as e:
+      logger.exception(e)
       logger.error("Invalid module {}; missing required attribute {}".format(modfile, e))
     except (IOError, ValueError) as e:
+      logger.exception(e)
       logger.error("Invalid module {}: {}".format(modfile, e))
 
   # Perform requested action on module definitions
@@ -133,22 +146,36 @@ The following special modules are available: "xkeys".
     mcode = module["code"]
     margs = module["extra_args"]
     mkwargs = module["extra_kwargs"]
+    logger.debug("Processing module {}...".format(mname))
     try:
       if args.action == "build":
         # Compile module
-        compile_module(mname, mcdef, mcode, *margs, **mkwargs)
+        logger.debug("Compiling module {}...".format(mname))
+        compile_module(mname, mcdef, mcode, tmpdir=args.t, *margs, **mkwargs)
         logger.info("Compiled module {} into {}".format(modfile, mname))
+        # Move compiled objects into cwd
+        for ext in ("a", "dll", "dylib", "so"):
+          mfile = "{}.{}".format(mname, ext)
+          oldname = os.path.join(args.t, mfile)
+          newname = mfile
+          if os.path.exists(oldname):
+            logger.info("Moving module {} to {}".format(oldname, newname))
+            os.rename(oldname, newname)
       elif args.action in ("clean", "distclean"):
         # Remove generated module files (and, optionally, compiled shared object)
-        logger.info("Removing compiled module {}".format(mname))
-        exts = ["o", "c"]
-        if args.action == "distclean":
-          exts.append("so")
-        for ext in exts:
-          fname = "{}.{}".format(mname, ext)
+        logger.info("Removing compiled module {} intermediate files".format(mname))
+        for ext in ("c", "o"):
+          fname = os.path.join(args.t, "{}.{}".format(mname, ext))
           if os.path.exists(fname):
             logger.info("Removing file {}".format(fname))
             os.remove(fname)
+        if args.action == "distclean":
+          logger.info("Removing compiled module {}".format(mname))
+          for ext in ("a", "dll", "dylib", "so"):
+            fname = "{}.{}".format(mname, ext)
+            if os.path.exists(fname):
+              logger.info("Removing file {}".format(fname))
+              os.remove(fname)
       elif args.action == "list":
         # Print module information
         print("{}\t{}\t{!r}".format(modfile, mname, retab(mcode)))
