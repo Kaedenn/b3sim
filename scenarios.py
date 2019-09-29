@@ -62,21 +62,37 @@ class ScenarioBase(object): # {{{0
     if self.get("rand"):
       # Adjust velocities by +/- 1%
       for oid in objs:
-        velOld = app.getBodyVelocity(oid)[0]
-        vel = (
-          velOld[0] + (random.random() - 0.5) * (velOld[0] / 100),
-          velOld[1] + (random.random() - 0.5) * (velOld[1] / 100),
-          velOld[2]
-        )
-        p.resetBaseVelocity(oid, linearVelocity=vel)
+        v0 = app.getBodyVelocity(oid)[0]
+        if np.linalg.norm(v0) > 0:
+          p.resetBaseVelocity(oid, linearVelocity=(
+            v0[0] + (random.random() - 0.5) * (v0[0] / 100),
+            v0[1] + (random.random() - 0.5) * (v0[1] / 100),
+            v0[2]
+          ))
+    for oid in objs:
+      dynamics = {}
+      if self.get("bouncy"):
+        # Set everything's restitution to 1
+        dynamics["restitution"] = 1
+      if self.get("frictionless"):
+        # Make everything frictionless
+        dynamics["lateralFriction"] = 0
+        dynamics["rollingFriction"] = 0
+        dynamics["spinningFriction"] = 0
+      if dynamics:
+        p.changeDynamics(oid, -1, **dynamics)
     return objs
 
   def setup(self, app):
     "(abstract) Create bodies and return the bodies created"
     return []
 
+  def __call__(self, app):
+    "Convenience alias for self.setup(app)"
+    self.setup(app)
+
   def __repr__(self):
-    "Convert scenario to a string for printing"
+    "Convert scenario to a string for printing or serialization"
     return "Scenario({!r}, {!r})".format(self._name, self._args)
 # 0}}}
 
@@ -88,14 +104,20 @@ def _name(obj, name): # {{{0
 # 0}}}
 
 class EmptyPlaneScenario(ScenarioBase): # {{{0
+  """
+  Create an empty plane
+  """
   def __init__(self, name=None, **kwargs):
     super(EmptyPlaneScenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(EmptyPlaneScenario, self).setup(app)
+    pos = app.worldFloor()
     wt = np.float(app.wallThickness())
     ws = np.float(app.worldSize())
     exts = [app.worldSizeMax()*ws+wt, app.worldSizeMax()*ws+wt, wt]
-    b = app.createBox(mass=0, pos=app.worldFloor(), exts=exts, rgba=C_NONE, restitution=1)
+    color = (1, 1, 1, 1)
+    b = app.createBox(mass=0, pos=pos, exts=exts, rgba=color, restitution=1)
     objs.append(b)
     return self._applyTransforms(app, objs)
 # 0}}}
@@ -112,27 +134,23 @@ class BoxedScenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BoxedScenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BoxedScenario, self).setup(app)
     a = app.getSlider("wallAlpha")
     wt = np.float(app.wallThickness())
     ws = np.float(app.worldSize())
-    wcx = np.array([wt, ws+wt, ws+wt])
-    wcy = np.array([ws+wt, wt, ws+wt])
-    wcz = np.array([ws+wt, ws+wt, wt])
-    if app.hasArg("bouncy"):
-      kw = {"restitution": 1}
-    else:
-      kw = {"restitution": 0}
-    walls = [
-      app.createBox(mass=0, pos=ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_RED, a), **kw),
-      app.createBox(mass=0, pos=-ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_BLU, a), **kw),
-      app.createBox(mass=0, pos=ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_GRN, a), **kw),
-      app.createBox(mass=0, pos=-ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_MAG, a), **kw),
-      app.createBox(mass=0, pos=ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_GRN, a), **kw),
-      app.createBox(mass=0, pos=-ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_BLU, a), **kw),
-    ]
-    objs.extend(walls)
+    wcx = V3(wt, ws+wt, ws+wt)
+    wcy = V3(ws+wt, wt, ws+wt)
+    wcz = V3(ws+wt, ws+wt, wt)
+    objs.extend([
+      app.createBox(mass=0, pos= ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_RED, a)),
+      app.createBox(mass=0, pos=-ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_BLU, a)),
+      app.createBox(mass=0, pos= ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_GRN, a)),
+      app.createBox(mass=0, pos=-ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_MAG, a)),
+      app.createBox(mass=0, pos= ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_GRN, a)),
+      app.createBox(mass=0, pos=-ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_BLU, a)),
+    ])
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -142,6 +160,7 @@ class BrickTower1Scenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BrickTower1Scenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BrickTower1Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
@@ -150,8 +169,8 @@ class BrickTower1Scenario(ScenarioBase): # {{{0
     bl = app.brickLength() * app.brickScale()
     bh = app.brickHeight() * app.brickScale()
     bd = app.brickDist() * app.brickScale()
-    b1e = np.array([bw/2, bl/2, bh/2])
-    b2e = np.array([bl/2, bw/2, bh/2])
+    b1e = V3(bw/2, bl/2, bh/2)
+    b2e = V3(bl/2, bw/2, bh/2)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
     bz = lambda i: i * bh
@@ -174,6 +193,7 @@ class BrickTower2Scenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BrickTower2Scenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BrickTower2Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
@@ -183,7 +203,7 @@ class BrickTower2Scenario(ScenarioBase): # {{{0
     bs = min(bw, bl)
     bh = app.brickHeight() * app.brickScale() * 2
     bd = bs * 3
-    bext = np.array([bs, bs, bh/2])
+    bext = V3(bs, bs, bh/2)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
     bz = lambda i: i * bh
@@ -205,6 +225,7 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BrickTower3Scenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BrickTower3Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
@@ -213,9 +234,9 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
     bl = app.brickLength() * app.brickScale()
     bh = app.brickHeight() * app.brickScale()
     bd = app.brickDist() * app.brickScale()
-    b1e = np.array([bw/2, bl/2, bh/2])
-    b2e = np.array([bl/2, bw/2, bh/2])
-    b3e = np.array([n*bd/2, n*bd/2, bh/8])
+    b1e = V3(bw/2, bl/2, bh/2)
+    b2e = V3(bl/2, bw/2, bh/2)
+    b3e = V3(n*bd/2, n*bd/2, bh/8)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
     bz = lambda i: i * bh
@@ -245,24 +266,26 @@ class ProjectileScenario(ScenarioBase): # {{{0
     super(ProjectileScenario, self).__init__(_name(self, name), **kwargs)
     self._vel = self.get("velCoeff", 20, float)
     self._shape = self.get("projShape", ProjectileScenario.SHAPE_SPHERE)
+    self._massCoeff = self.get("projMass", 100, float)
+    targetX = self.get("projTargetX", 0, float)
+    targetY = self.get("projTargetY", 0, float)
+    targetZ = self.get("projTargetZ", 0, float)
+    self._target = V3(targetX, targetY, targetZ)
 
   def _make(self, app, x, y, z):
-    spos = app.worldFloor() + np.array([x, y, app.worldSize()/4 + z])
-    svel = self._vel * -unit(np.array([spos[0], spos[1], 0]))
-    kw = {}
-    if app.hasArg("bouncy"):
-      kw["restitution"] = 1
-    mass = app.objectMass()*100
+    spos = app.worldFloor() + V3(x, y, app.worldSize()/4 + z)
+    svel = self._vel * unit(self._target - V3(spos[0], spos[1], 0))
+    mass = app.objectMass() * self._massCoeff
     size = self.get("projSize", app.objectRadius()/2, float)
     if self._shape == ProjectileScenario.SHAPE_SPHERE:
-      s = app.createSphere(mass, spos, radius=size, **kw)
+      s = app.createSphere(mass, spos, radius=size)
     elif self._shape == ProjectileScenario.SHAPE_BOX:
-      s = app.createBox(mass=mass, exts=size*np.array([1,1,1]), pos=spos, **kw)
+      s = app.createBox(mass=mass, exts=size * V3_111, pos=spos)
     elif self._shape == ProjectileScenario.SHAPE_CAPSULE:
-      s = app.createCapsule(mass=mass, pos=spos, radii=(size, size/4), **kw)
+      s = app.createCapsule(mass=mass, pos=spos, radii=(size, size/4))
     else:
       sys.stderr.write("Unknown shape {}; using spheres".format(self._shape))
-      s = app.createSphere(mass, spos, radius=size, **kw)
+      s = app.createSphere(mass, spos, radius=size)
     p.resetBaseVelocity(s, linearVelocity=svel)
     return s
 
@@ -283,24 +306,23 @@ class BallpitScenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BallpitScenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BallpitScenario, self).setup(app)
-    floor = app.worldFloor()
-    offset = floor + np.array([0, 0, app.getSlider("sphereZOffset")])
     wmin, wmax = app.worldXMin(), app.worldXMax()
     ymin, ymax = app.worldYMin(), app.worldYMax()
     zmin, zmax = app.worldZMin(), app.worldZMax()
+    mass = app.objectMass()
+    rad = app.objectRadius()
     for i in range(app.numObjects()):
-      spos = np.array([
+      spos = V3(
         random.uniform(wmin, wmax),
         random.uniform(wmin, wmax),
-        random.uniform(zmin, zmax)])
-      s = app.createSphere(app.objectMass(), spos, app.objectRadius(), restitution=1)
-      objs.append(s)
+        random.uniform(zmin, zmax))
+      objs.append(app.createSphere(mass, spos, rad, restitution=1))
     return self._applyTransforms(app, objs)
 # 0}}}
 
-# XXX: Doesn't quite work; the created bunny is a rigid body.
 class BunnyScenario(ScenarioBase): # {{{0
   """
   Load a soft body bunny into the world
@@ -311,9 +333,10 @@ class BunnyScenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BunnyScenario, self).__init__(_name(self, name), **kwargs)
+
   def setup(self, app):
     objs = super(BunnyScenario, self).setup(app)
-    pos = app.worldFloor() + np.array([0, 0, self.get("bunnyZ", 5, float)])
+    pos = app.worldFloor() + V3(z=self.get("bunnyZ", 5, float))
     orn = p.getQuaternionFromEuler([math.pi/2, 0, 0])
     scale = self.get("bunnySize", 2, float)
     mass = self.get("bunnyMass", app.objectMass() * 10, float)

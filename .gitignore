@@ -9,6 +9,5 @@ old/
 *.so
 
 # FFI modules
-exmod.*
-xkeys.*
-printf.*
+ffi/*.c
+ffi/*.o

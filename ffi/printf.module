@@ -1,6 +1,8 @@
 
 # "printf" module
-# This module exports the ubiquitous "printf" family of functions.
+# This module exports the ubiquitous "printf" family of functions: printf,
+# sprintf, and snprintf. This module also exports sprintf_size, which returns
+# the amount of memory needed to store a formatted string.
 
 {
   "name": "printf",
@@ -27,4 +29,4 @@ int sprintf_size(const char* format, ...) {
   "extra_kwargs": {}
 }
 
-# vim: set ts=2 sts=2 sw=2 et:
+# vim: set ts=2 sts=2 sw=2 et filetype=python:

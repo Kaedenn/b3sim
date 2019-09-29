@@ -1,6 +1,17 @@
+#!/usr/bin/env python
+
+"""
+PyBullet Simulation: Driver Application
+
+This module defines specific pybullet simulations with the scenarios defined
+in scenarios.py. See bulletbase.py, pyb3.py, and the Simulation.__init__
+docstring for more information.
+"""
+
 from __future__ import print_function
 
 import argparse
+import logging
 import random
 import sys
 import time
@@ -9,20 +20,41 @@ from pyb3 import pybullet as p
 from bulletbase import B3, BulletAppBase
 from utility import *
 from keypressmgr import *
-from greek import *
+from symbols import *
 from scenarios import *
 
-# Globals, constants, enumerations {{{0
+# Logging {{{0
+LOGGING_FORMAT = "%(filename)s:%(lineno)s:%(levelname)s:%(name)s: %(message)s"
+logging.basicConfig(format=LOGGING_FORMAT, level=logging.INFO)
+logger = logging.getLogger(__name__)
+# 0}}}
 
-# Information on the available keybinds
-# Unused: b e f n q r t u x y z
-KEYBIND_HELP_TEXT = r"""Available keybinds:
+# Keybind help text {{{0
+# Unused: b e f n q r t u x y z , . / 1 2 3 4 5 6 7 8 9 0 Num1 Num3
+# Broken: c i j k l o
+KEYBIND_HELP_TEXT = ur"""Available keybinds:
 h       Display keybind help (this list)
+b       Print entire body list
 ?       Print camera/target information
 `       Toggle built-in keyboard shortcuts
 \       Pause/resume simulation
 F1      Render scene to a file
 Escape  Close simulation
+
+Camera movement:
+Up      Increase pitch
+Down    Decrease pitch
+Left    Decrease yaw: rotate scene to the right
+Right   Increase yaw: rotate scene to the left
+Alt+Up  Decrease distance to target (shift to move 10x)
+Alt+Dn  Increase distance to target (shift to move 10x)
+Num 8   Move target position north (towards positive y) (shift to move 10x)
+Num 2   Move target position south (towards negative y) (shift to move 10x)
+Num 6   Move target position east (towards positive x) (shift to move 10x)
+Num 4   Move target position west (towards negative x) (shift to move 10x)
+Num 9   Move target position up (towards positive z) (shift to move 10x)
+Num 7   Move target position down (towards negative z) (shift to move 10x)
+Num 5   Reset target position to the center of the world floor
 
 Built-in keyboard shortcuts (X = may not work):
 a       Toggle AABB (during wireframe)
@@ -35,11 +67,14 @@ k   X   Toggle drawing of constraints
 l   X   Toggle drawing of constraint limits
 m       Toggle mouse picking
 o   X   Single-step simulation
-p       Begin/end logging of timings
-s       Toggle shadow map
+p       Begin/end logging of timings (to {timings_path})
+s       Toggle shadow map (object shading)
 v       Toggle rendering visual geometry
 w       Toggle wireframe drawing
-"""
+""".format(timings_path="/tmp/timings")
+# 0}}}
+
+# Globals, constants, enumerations {{{0
 
 # Default values for argument parsing (configurable)
 DFLT_OBJECTS = 10
@@ -85,7 +120,6 @@ class Simulation(BulletAppBase):
       worldSizeMax:   maximum world scale (100)
       objectRadius:   radius for each object (0.05)
       objectMass:     mass for each object (0.05)
-      sphereZOffset:  starting minimum height for the spheres (10)
       wallThickness:  thickness of bounding-box walls (0.1)
       numBricks:      override (approximate) number of bricks (numObjects)
       brickWidth:     width of each brick (0.5)
@@ -105,11 +139,12 @@ class Simulation(BulletAppBase):
       projectile:     add projectile scenario (False)
       pit:            add "ball pit" scenario (False)
       bunny:          add bunny scenario (False)
-      fuzzy:          apply random jitter to certain scenarios (0.0)
 
     Scenario-specific keyword arguments:
-      bouncy:         ("walls") make things bounce off the walls (False)
+      bouncy:         (various) set body resitution to 1 (False)
       rand:           (various) adjust body velocities by +/- 1% (False)
+      projShape       ("projectile") 1, 2, 3 for SPHERE, BOX, CAPSULE (1)
+      projSize        ("projectile") projectile size (objectRadius/2)
       projSpeed       ("projectile") speed of the projectiles (20)
       bunnyZ          ("bunny") height of the bunny off the floor (5)
       bunnySize       ("bunny") size mult of the bunny (2)
@@ -117,15 +152,8 @@ class Simulation(BulletAppBase):
 
     If b1, b2, and b3 are False, then "pit" is set to True.
 
-    The following debug inputs are applied only on resets (the backslash key):
-      numBricks
-      numBrickLayers
-      wallAlpha
-      sphereZOffset
-
     Note: the following constraints should hold to avoid the simulation locking
-    up trying to calculate object motions. "<<" means "much less than" (as in,
-    by at least about an order of magnitude).
+    up trying to calculate object motions. "<<" means "much less than".
       0 < numObjects
       0 < numBricks
       0 < objectRadius < worldSize
@@ -160,10 +188,6 @@ class Simulation(BulletAppBase):
         self.getArg("numBrickLayers", 20, int))
     self.addSlider("wallAlpha", 0, 1,
         self.getArg("wallAlpha", 0.1, float))
-    self.addSlider("sphereZOffset", 0, 20,
-        self.getArg("sphereZOffset", self._ws, int))
-    # TODO: REMOVE
-    self._button = p.addUserDebugButton("testButton", True)
   # 0}}}
 
   def numObjects(self): # {{{0
@@ -226,7 +250,7 @@ class Simulation(BulletAppBase):
     Returns a vector at the center of the world's floor (determined by the
     walls being centered about the origin)
     """
-    return np.array([0, 0, -self._ws + self._wt])
+    return V3(0, 0, -self._ws + self._wt)
   # 0}}}
 
   def worldXMin(self): # {{{0
@@ -272,20 +296,20 @@ class Simulation(BulletAppBase):
     wm = self.worldSizeMax()
     for i in range(int(round(wm))):
       # Draw a line from (-wm, i) to (wm, i)
-      p1 = self.worldFloor() + np.array([-wm, i, 0])
-      p2 = self.worldFloor() + np.array([wm, i, 0])
+      p1 = self.worldFloor() + V3(-wm, i, 0)
+      p2 = self.worldFloor() + V3(wm, i, 0)
       self.drawLine(p1, p2, color=C_NONE)
       # Draw a line from (-wm, -i) to (wm, -i)
-      p1 = self.worldFloor() + np.array([-wm, -i, 0])
-      p2 = self.worldFloor() + np.array([wm, -i, 0])
+      p1 = self.worldFloor() + V3(-wm, -i, 0)
+      p2 = self.worldFloor() + V3(wm, -i, 0)
       self.drawLine(p1, p2, color=C_NONE)
       # Draw a line from (i, -wm) to (i, wm)
-      p1 = self.worldFloor() + np.array([i, -wm, 0])
-      p2 = self.worldFloor() + np.array([i, wm, 0])
+      p1 = self.worldFloor() + V3(i, -wm, 0)
+      p2 = self.worldFloor() + V3(i, wm, 0)
       self.drawLine(p1, p2, color=C_NONE)
       # Draw a line from (-i, -wm) to (-i, wm)
-      p1 = self.worldFloor() + np.array([-i, -wm, 0])
-      p2 = self.worldFloor() + np.array([-i, wm, 0])
+      p1 = self.worldFloor() + V3(-i, -wm, 0)
+      p2 = self.worldFloor() + V3(-i, wm, 0)
       self.drawLine(p1, p2, color=C_NONE)
   # 0}}}
 
@@ -294,37 +318,48 @@ class Simulation(BulletAppBase):
     scs = [EmptyPlaneScenario()]
     wantWalls = self.getArg("walls")
     wantBricks1 = self.getArg("bricks") or self.getArg("b1")
-    wantBricks2 = self.getArg("b2")
-    wantBricks3 = self.getArg("b3")
+    wantBricks2 = self.getArg("bricks2") or self.getArg("b2")
+    wantBricks3 = self.getArg("bricks3") or self.getArg("b3")
     wantBricksAny = wantBricks1 or wantBricks2 or wantBricks3
     wantProjectile = self.getArg("projectile")
     wantPit = self.getArg("pit")
     wantBunny = self.getArg("bunny")
-    wantRandom = self.getArg("fuzzy")
+    wantRand = self.getArg("rand")
     if wantWalls:
       scs.append(BoxedScenario())
     if wantPit or not wantBricksAny:
-      scs.append(BallpitScenario())
+      scs.append(BallpitScenario(rand=wantRand))
     if wantBricks1:
-      scs.append(BrickTower1Scenario())
+      scs.append(BrickTower1Scenario(rand=wantRand))
     if wantBricks2:
-      scs.append(BrickTower2Scenario())
+      scs.append(BrickTower2Scenario(rand=wantRand))
     if wantBricks3:
       scs.append(BrickTower3Scenario())
     if wantProjectile:
-      scs.append(ProjectileScenario(
-        rand=wantRandom,
-        projShape=self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int),
-        projSize=self.getArg("projSize", self.objectRadius()/2, float),
-        velCoeff=self.getArg("projSpeed", 20, float)))
+      kws = {}
+      kws["projShape"] = self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int)
+      kws["projSize"] = self.getArg("projSize", self.objectRadius()/2, float)
+      kws["velCoeff"] = self.getArg("projSpeed", 20, float)
+      kws["projMass"] = self.getArg("projMass", 100, float)
+      kws["projTargetX"] = self.getArg("projTargetX", 0, float)
+      kws["projTargetY"] = self.getArg("projTargetY", 0, float)
+      kws["projTargetZ"] = self.getArg("projTargetZ", 0, float)
+      scs.append(ProjectileScenario(rand=wantRand, **kws))
     if wantBunny:
-      scs.append(BunnyScenario(
-        rand=wantRandom,
-        bunnyZ=self.getArg("bunnyZ", 5, float),
-        bunnySize=self.getArg("bunnySize", 2, float),
-        bunnyMass=self.getArg("bunnyMass", self.objectMass() * 10, float)))
+      kws = {}
+      kws["bunnyZ"] = self.getArg("bunnyZ", 5, float)
+      kws["bunnySize"] = self.getArg("bunnySize", 2, float)
+      kws["bunnyMass"] = self.getArg("bunnyMass", self.objectMass() * 10, float)
+      scs.append(BunnyScenario(**kws))
     for sc in scs:
-      sc.setup(self)
+      if self.getArg("bouncy"):
+        sc.set("bouncy", True)
+      if self.getArg("frictionless"):
+        sc.set("frictionless", True)
+      self.debug("Setting up scenario {!r}".format(sc))
+      for b in sc.setup(self):
+        self._bodies.add(b)
+    logger.debug("Added {} bodies from {} scenarios".format(len(self._bodies), len(scs)))
 
     if self.getArg("axes") or self._debug:
       self._addAxes()
@@ -340,41 +375,59 @@ class Simulation(BulletAppBase):
     self.setRendering(False)
     self.updateGravity()
     self._addObjects()
+    if self.hasArg("save"):
+      p.saveBullet(self.getArg("save"))
+    if self.hasArg("load"):
+      p.loadBullet(self.getArg("load"))
     self.setRendering(True)
     if not self.getArg("frozen"):
       self.setRealTime(True)
+    logger.debug("Reset simulation")
   # 0}}}
 
-  def tick(self): # {{{0
-    "Apply continuous information from the user debug inputs"
-    self.updateGravity()
-    b = p.readUserDebugParameter(self._button)
-    if b != 0:
-      print(b)
-  # 0}}}
-
-def onHelpKey(app): # {{{0
+def onKeyHelp(app): # {{{0
   "Print help information"
   p.b3Print(KEYBIND_HELP_TEXT.rstrip())
 # 0}}}
 
-def onStatusKey(app, keys): # {{{0
+def onKeyDump(app): # {{{0
+  "Dump information on all bodies"
+  print("Tracked bodies: {}".format(app._bodies))
+  for bnr in range(p.getNumBodies()):
+    bid = p.getBodyUniqueId(bnr)
+    print("Body {} {}:".format(bnr, bid))
+    try:
+      bd = app.getBodyDynamics(bid)
+      p1, p2 = app.getAABB(bid)
+      print("  AABB: {} to {}".format(p1, p2))
+      print("  Mass: {}".format(bd["mass"]))
+      for s in app.getBodyShapes(bid):
+        tn = B3.getGeometryName(s["geomType"])
+        print("  Shape: {}; Size: {}; Color: {}".format(tn, s["size"], s["rgbaColor"]))
+    except p.error as e:
+      logger.exception(e)
+      logger.error("Failed getting info: {}".format(e))
+# 0}}}
+
+def onKeyStatus(app, keys): # {{{0
   "Print status information"
   if keys.get(p.B3G_SHIFT, 0) & (p.KEY_IS_DOWN | p.KEY_WAS_TRIGGERED):
     c = formatVec(app.getCameraPos())
     o = formatVec([app.getPitch(), app.getYaw(), app.getDistanceToTarget()])
     t = formatVec(app.getTargetPos())
-    s = u"""Camera position, camera orientation, target position:
-cxyz: {camera}
-c{theta}{phi}{delta}: {orientation}
-txyz: {target}
-""".format(camera=c,
-           orientation=o,
-           target=t,
-           theta=GREEK_LOWER_THETA,
-           phi=GREEK_LOWER_PHI,
-           delta=GREEK_LOWER_DELTA)
-    p.b3Print(s.encode("UTF-8").rstrip())
+    kwds = {
+      "camera": c,
+      "orientation": o,
+      "target": t,
+      "theta": GREEK_LOWER_THETA,
+      "phi": GREEK_LOWER_PHI,
+      "delta": GREEK_LOWER_DELTA
+    }
+    s = u"""
+Camera xyz: {camera}
+Camera {theta}{phi}{delta}: {orientation}
+Target xyz: {target}""".format(**kwds)
+    p.b3Print(s.encode("UTF-8"))
 # 0}}}
 
 def onMovementKey(app, keys): # {{{0
@@ -387,7 +440,7 @@ def onMovementKey(app, keys): # {{{0
       return DIR_POS
     return 0 # 1}}}
   # Rules that define what keys do what
-  MOVEMENTS = {
+  MOVEMENTS = { # {{{1
     CAM_AXIS_PITCH: {
       "enable": anyPressed(keys, p.B3G_UP_ARROW, p.B3G_DOWN_ARROW) \
           and not isPressed(keys, p.B3G_ALT) \
@@ -428,9 +481,9 @@ def onMovementKey(app, keys): # {{{0
       "dir": getDir(p.B3G_KP_7, p.B3G_KP_9),
       "fast": isPressed(keys, p.B3G_SHIFT)
     },
-  }
+  } # 1}}}
+  # Calculate desired movement
   movement = {}
-  # Determine what we're updating
   for axis, rules in MOVEMENTS.items():
     if rules["enable"]:
       dv = rules["step"] * rules["dir"]
@@ -443,10 +496,12 @@ def onMovementKey(app, keys): # {{{0
     app.setTargetPos(app.worldFloor())
 # 0}}}
 
-def onToggleCov(app, covname, dflt=False): # {{{0
+def onToggleCov(app, cov, dflt=False): # {{{0
   "Callback: toggle a debug configuration option"
-  cov = B3.getCovByName(covname)
+  if isinstance(cov, basestring):
+    cov = B3.getCovByName(cov)
   app.toggleCov(cov)
+  logger.info("Set COV {} to {}".format(B3.getCovName(cov), app.covActive(cov)))
 # 0}}}
 
 def mainLoop(args, a, kbm): # {{{0
@@ -457,15 +512,15 @@ def mainLoop(args, a, kbm): # {{{0
   try:
     while a.isConnected():
       tickCounter += 1
-      #for e in p.getMouseEvents():
-      #  tp, mx, my, bi, bs = e
-      #  print(e)
       # Handle key events
       with kbm:
         if args.debug:
           kbm.debugDumpKeys()
-      # Update continuous variables, like gravity
-      a.tick()
+      #for e in p.getMouseEvents():
+      #  tp, mx, my, bi, bs = e
+      #  print(e)
+      # Update continuous variables
+      a.updateGravity()
       # Sleep until the next tick
       nextTickTime = getTickTime(tickCounter + 1)
       dt = nextTickTime - monotonic()
@@ -473,68 +528,116 @@ def mainLoop(args, a, kbm): # {{{0
         time.sleep(dt)
   except p.NotConnectedError:
     pass
+  except p.error as e:
+    logger.exception(e)
 # 0}}}
 
-if __name__ == "__main__": # {{{0
-  # If python -i, run PYTHONSTARTUP
-  if sys.flags.interactive and "PYTHONSTARTUP" in os.environ:
-    execfile(os.environ["PYTHONSTARTUP"])
+### Driver: argument parsing, initialization, keybinds ###
 
+def parseArgs(): # {{{0
   # Parse arguments
-  parser = argparse.ArgumentParser(
+  ap = argparse.ArgumentParser(
       usage="%(prog)s [options] [pybullet-options]",
       epilog="""
 All unhandled arguments are passed to pybullet as-is. The -c argument can be
 used more than once. For --cam, "Df" means "default value". Passing --noloop
-will prevent some keybinds (pause, reset) from working.
-""",
+will prevent some keybinds (pause, reset) from working.""",
       formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-  parser.add_argument("--keys-help", action="store_true",
-                      help="print keybind help information and exit")
-  parser.add_argument("-n", dest="num", metavar="N", type=int, default=DFLT_OBJECTS,
-                      help="number of objects (general magnitude)")
-  parser.add_argument("-r", dest="radius", metavar="R", type=float, default=DFLT_RADIUS,
-                      help="object radius/size (general magnitude)")
-  parser.add_argument("-m", dest="mass", metavar="M", type=float, default=DFLT_MASS,
-                      help="object mass (general magnitude)")
-  parser.add_argument("-g", "--gui", action="store_true",
-                      help="start with the GUI visible")
-  parser.add_argument("-f", "--frozen", action="store_true",
-                      help="start with the simulation frozen")
-  parser.add_argument("-c", dest="config", action="append", metavar="KEY[=VAL]",
-                      help="set simulation configuration option(s)")
-  parser.add_argument("--cam", metavar="P,Y,D,Tx,Ty,Tz", default="Df,Df,Df,Df,Df,Df",
-                      help="set starting camera position and orientation")
-  parser.add_argument("--cdp", metavar="NUM", type=float, default=KEY_STEP_PITCH,
-                      help="camera movement step: camera pitch")
-  parser.add_argument("--cdy", metavar="NUM", type=float, default=KEY_STEP_YAW,
-                      help="camera movement step: camera yaw")
-  parser.add_argument("--cdd", metavar="NUM", type=float, default=KEY_STEP_DIST,
-                      help="camera movement step: distance from camera to target")
-  parser.add_argument("--cdtx", metavar="NUM", type=float, default=KEY_STEP_X,
-                      help="camera movement step: target x coordinate")
-  parser.add_argument("--cdty", metavar="NUM", type=float, default=KEY_STEP_Y,
-                      help="camera movement step: target y coordinate")
-  parser.add_argument("--cdtz", metavar="NUM", type=float, default=KEY_STEP_Z,
-                      help="camera movement step: target z coordinate")
-  parser.add_argument("--noloop", action="store_true",
-                      help="don't enter the main loop (for interactive scripting)")
-  parser.add_argument("--debug", action="store_true",
-                      help="output quite a bit of debugging information")
-  args, remainder = parser.parse_known_args()
+  ap.add_argument("--keys-help", action="store_true",
+                  help="print keybind help information and exit")
+  ap.add_argument("--width", metavar="NUM", type=int, default=1024,
+                  help="width of the example browser window")
+  ap.add_argument("--height", metavar="NUM", type=int, default=768,
+                  help="height of the example browser window")
+  ap.add_argument("-n", dest="num", metavar="N", type=int, default=DFLT_OBJECTS,
+                  help="number of objects (general magnitude)")
+  ap.add_argument("-r", dest="radius", metavar="R", type=float, default=DFLT_RADIUS,
+                  help="object radius/size (general magnitude)")
+  ap.add_argument("-m", dest="mass", metavar="M", type=float, default=DFLT_MASS,
+                  help="object mass (general magnitude)")
+  ap.add_argument("-g", "--gui", action="store_true",
+                  help="start with the GUI visible")
+  ap.add_argument("-f", "--frozen", action="store_true",
+                  help="start with the simulation frozen")
+  ap.add_argument("-c", dest="config", action="append", metavar="KEY[=VAL]",
+                  help="set simulation configuration option(s)")
+  ap.add_argument("--bgr", metavar="NUM", type=int,
+                  help="background color: red component")
+  ap.add_argument("--bgg", metavar="NUM", type=int,
+                  help="background color: green component")
+  ap.add_argument("--bgb", metavar="NUM", type=int,
+                  help="background color: blue component")
+  ap.add_argument("--bg", metavar="COLOR",
+                  help="background color: 3-tuple or hex string")
+  ap.add_argument("--cam", metavar="P,Y,D,Tx,Ty,Tz", default="Df,Df,Df,Df,Df,Df",
+                  help="set starting camera position and orientation")
+  ap.add_argument("--cdp", metavar="NUM", type=float, default=KEY_STEP_PITCH,
+                  help="camera movement step: camera pitch")
+  ap.add_argument("--cdy", metavar="NUM", type=float, default=KEY_STEP_YAW,
+                  help="camera movement step: camera yaw")
+  ap.add_argument("--cdd", metavar="NUM", type=float, default=KEY_STEP_DIST,
+                  help="camera movement step: distance from camera to target")
+  ap.add_argument("--cdtx", metavar="NUM", type=float, default=KEY_STEP_X,
+                  help="camera movement step: target x coordinate")
+  ap.add_argument("--cdty", metavar="NUM", type=float, default=KEY_STEP_Y,
+                  help="camera movement step: target y coordinate")
+  ap.add_argument("--cdtz", metavar="NUM", type=float, default=KEY_STEP_Z,
+                  help="camera movement step: target z coordinate")
+  ap.add_argument("--noloop", action="store_true",
+                  help="don't enter the main loop (for interactive scripting)")
+  ap.add_argument("--save", metavar="PATH",
+                  help="save .bullet file before starting the simulation")
+  ap.add_argument("--load", metavar="PATH",
+                  help="load .bullet file before starting the simulation")
+  ap.add_argument("--debug", action="store_true",
+                  help="output quite a bit of debugging information")
+  args, remainder = ap.parse_known_args()
   if args.keys_help:
-    parser.print_help()
+    ap.print_help()
     sys.stderr.write("\n")
     sys.stderr.write(KEYBIND_HELP_TEXT)
     raise SystemExit(0)
+  if args.debug:
+    logger.setLevel(logging.DEBUG)
+  return args, remainder
+# 0}}}
 
+def gatherBulletArgs(args, remainder): # {{{0
+  "Gather the arguments to pass to pybullet.connect"
   # Determine the arguments to pass to pybullet.connect
   simArgs = []
+  if args.width:
+    simArgs.append("--width={}".format(args.width))
+  if args.height:
+    simArgs.append("--height={}".format(args.height))
   if not args.gui:
     simArgs.append("--nogui")
-  simArgs.extend(remainder)
 
-  # Determine the arguments to pass to the simulation class
+  # Determine background color arguments
+  cr, cg, cb = args.bgr, args.bgg, args.bgb
+  if args.bg:
+    if args.bg[0] == '#' and len(args.bg) == 7:
+      rv, gv, bv = args.bg[1:3], args.bg[3:5], args.bg[5:7]
+      cr = int("0x" + rv) * 1.0 / 256
+      cg = int("0x" + gv) * 1.0 / 256
+      cb = int("0x" + bv) * 1.0 / 256
+    elif args.bg.count(",") == 2:
+      cr, cg, cb = map(float, args.bg.split(","))
+    else:
+      logger.error("Failed parsing --bg {!r}; ignoring".format(args.bg))
+  if cr is not None:
+    simArgs.append("--background_color_red={}".format(cr))
+  if cg is not None:
+    simArgs.append("--background_color_green={}".format(cg))
+  if cb is not None:
+    simArgs.append("--background_color_blue={}".format(cb))
+
+  simArgs.extend(remainder)
+  return simArgs
+# 0}}}
+
+def gatherSimArgs(args, remainder): # {{{0
+  "Gather the arguments to pass to the simulation"
   extraKwargs = {}
   if args.config is not None:
     for val in args.config:
@@ -557,21 +660,58 @@ will prevent some keybinds (pause, reset) from working.
   extraKwargs["cdtx"] = args.cdtx
   extraKwargs["cdty"] = args.cdty
   extraKwargs["cdtz"] = args.cdtz
-  extraKwargs["connectArgs"] = " ".join(simArgs)
+  extraKwargs["connectArgs"] = " ".join(gatherBulletArgs(args, remainder))
+  if args.save:
+    extraKwargs["save"] = args.save
+  if args.load:
+    extraKwargs["load"] = args.load
+  return extraKwargs
+# 0}}}
+
+def parseCameraArg(arg): # {{{0
+  cstart = (CAM_START_PITCH, CAM_START_YAW, CAM_START_DIST, CAM_START_TARGET)
+  cinfo = parseCameraSpec(arg, *cstart)
+  return {
+    "pitch": cinfo[0],
+    "yaw": cinfo[1],
+    "distance": cinfo[2],
+    "target": cinfo[3]
+  }
+# 0}}}
+
+def setupKeyBinds(a): # {{{0
+  "Create the keypress manager and register keypress events"
+  kbm = KeyPressManager(a, debug=args.debug)
+  onMove = lambda keys: onMovementKey(a, keys)
+  for key in KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD:
+    kbm.bind(key, onMove, keys=True, repeat=True)
+  kbm.bind(" ", lambda: a.reset())
+  kbm.bind("h", lambda: onKeyHelp(a))
+  kbm.bind("b", lambda: onKeyDump(a))
+  kbm.bind("/", lambda keys: onKeyStatus(a, keys), keys=True)
+  kbm.bind(".", lambda: a.stepSim(), repeat=True)
+  kbm.bind("m", lambda: onToggleCov(a, p.COV_ENABLE_MOUSE_PICKING, dflt=True))
+  kbm.bind("`", lambda: onToggleCov(a, p.COV_ENABLE_KEYBOARD_SHORTCUTS, dflt=True))
+  kbm.bind("\\", lambda: a.toggleSim())
+  return kbm
+# 0}}}
+
+if __name__ == "__main__": # {{{0
+  # If python -i, run PYTHONSTARTUP
+  if sys.flags.interactive and "PYTHONSTARTUP" in os.environ:
+    execfile(os.environ["PYTHONSTARTUP"])
+
+  # Parse sys.argv
+  args, remainder = parseArgs()
 
   # Construct the simulation
-  app = a = Simulation(numObjects=args.num, **extraKwargs)
+  app = Simulation(args.num, **gatherSimArgs(args, remainder))
 
   # Parse and apply the --cam argument
-  cinfo = parseCameraSpec(args.cam,
-                          CAM_START_PITCH,
-                          CAM_START_YAW,
-                          CAM_START_DIST,
-                          CAM_START_TARGET)
-  camPitch, camYaw, camDist, camTarget = cinfo
-  a.setCamera(pitch=camPitch, yaw=camYaw, distance=camDist, target=camTarget)
+  app.setCamera(**parseCameraArg(args.cam))
+
   # Start the simulation
-  a.reset()
+  app.reset()
 
   # Hide the preview windows as they're completely unused
   app.toggleCov(p.COV_ENABLE_RGB_BUFFER_PREVIEW, False)
@@ -579,26 +719,11 @@ will prevent some keybinds (pause, reset) from working.
   app.toggleCov(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, False)
 
   # Bind various keys (camera movement, toggles, help, etc)
-  kbm = KeyPressManager(a, debug=args.debug)
-  kbm.bind(p.B3G_SPACE, a.reset)
-  kbm.bindAll(KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD,
-              lambda keys: onMovementKey(a, keys),
-              wantKeyInfo=True,
-              on=p.KEY_IS_DOWN | p.KEY_WAS_TRIGGERED)
-  kbm.bind("h", onHelpKey, funcArgs=(a,))
-  kbm.bind("/", lambda keys: onStatusKey(a, keys), wantKeyInfo=True)
-  kbm.bind(".", a.stepSim, on=p.KEY_IS_DOWN | p.KEY_WAS_TRIGGERED)
-  kbm.bind("m", onToggleCov,
-           funcArgs=(a, "ENABLE_MOUSE_PICKING"),
-           funcKwargs={"dflt": True})
-  kbm.bind("`", onToggleCov,
-           funcArgs=(a, "ENABLE_KEYBOARD_SHORTCUTS"),
-           funcKwargs={"dflt": True})
-  kbm.bind("\\", a.toggleSim)
+  kbm = setupKeyBinds(app)
 
   # Process events until the server closes
   if not args.noloop:
-    mainLoop(args, a, kbm)
+    mainLoop(args, app, kbm)
 # 0}}}
 
 # vim: set ts=2 sts=2 sw=2 et:

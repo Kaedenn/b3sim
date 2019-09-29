@@ -1,8 +1,15 @@
 #!/usr/bin/env python
 
 """
-Greek alphabet constants
+Unicode characters (Greek, symbols, etc)
 """
+
+# White Arrows {{{0
+ARROW_LEFT = unichr(0x21e6)
+ARROW_UP = unichr(0x21e7)
+ARROW_RIGHT = unichr(0x21e8)
+ARROW_DOWN = unichr(0x21e9)
+# 0}}}
 
 # Greek letters {{{0
 GREEK_UPPER_ALPHA = unichr(0x391)

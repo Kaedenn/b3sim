@@ -126,73 +126,54 @@ class KeyPressManager(object): # {{{0
     self._debug = kwargs.get("debug", False)
   # 1}}}
 
-  def _shouldAddKeyInfo(self, kb): # {{{1
-    "Determine if the function should be called with self._keys"
-    if kb["wantKeyInfo"] in (True, False):
-      return kb["wantKeyInfo"]
-    return False
-  # 1}}}
-
-  @_verifyKeysAttr
-  def _callBoundFunc(self, kb): # {{{1
-    "Private: call the function defined in the keybind object"
-    wantKeys = self._shouldAddKeyInfo(kb)
-    func = kb["func"]
-    funcArgs = [self._keys] if wantKeys else []
-    funcKwargs = {}
-    funcArgs.extend(kb["extraArgs"])
-    funcKwargs.update(kb["extraKwargs"])
-    if self._debug:
-      print("Calling {}(*{}, **{})".format(func, funcArgs, funcKwargs))
-    return func(*funcArgs, **funcKwargs)
-  # 1}}}
-
   def bind(self, key, func, # {{{1
-           timeoutPeriod=0,
-           wantKeyInfo=None,
+           timeout=0,
+           keys=None,
            on=p.KEY_WAS_TRIGGERED,
-           funcArgs=None, funcKwargs=None):
+           repeat=False,
+           args=None, kwargs=None):
     """Bind a key to a function
-    Parameters:
     key
       The key code to listen for
     func
       The function to call
-    timeoutPeriod
+    timeout
       Time in seconds to ignore the key
-    wantKeyInfo
+    keys
       If True, pass the key-press info as the first argument to func
     on
       Bit mask of the desired key states; only matching states will call func
-    funcArgs
+    repeat
+      Handle a key being held down continuously
+    args
       Extra positional args to pass to func
-    funcKwargs
+    kwargs
       Extra keyword arguments to pass to func
     """
     fArgs = []
     fKwargs = {}
-    if funcArgs is not None:
-      fArgs.extend(funcArgs)
-    if funcKwargs is not None:
-      fKwargs.update(funcKwargs)
+    if args is not None:
+      fArgs.extend(args)
+    if kwargs is not None:
+      fKwargs.update(kwargs)
     kb = {
       "key": key,
       "func": func,
-      "states": on,
-      "timeout": timeoutPeriod,
+      "states": on | (p.KEY_IS_DOWN if repeat else 0),
+      "timeout": timeout,
       "lastPress": 0,
-      "wantKeyInfo": wantKeyInfo,
+      "wantKeyInfo": keys,
       "extraArgs": fArgs,
       "extraKwargs": fKwargs
     }
     self._binds.append(kb)
   # 1}}}
 
-  def bindAll(self, keys, func, *args, **kwargs): # {{{1
+  def bindAll(self, keyCodes, func, *args, **kwargs): # {{{1
     """Bind a list/tuple of keys to a function
     See documentation for self.bind
     """
-    for k in keys:
+    for k in keyCodes:
       self.bind(k, func, *args, **kwargs)
   # 1}}}
 
@@ -210,6 +191,20 @@ class KeyPressManager(object): # {{{0
   def __exit__(self, exc_type, exc_val, exc_tb): # {{{1
     "End current round of key press handling"
     self._keys = None
+  # 1}}}
+
+  @_verifyKeysAttr
+  def _callBoundFunc(self, kb): # {{{1
+    "Private: call the function defined in the keybind object"
+    wantKeys = kb["wantKeyInfo"] if kb["wantKeyInfo"] in (True, False) else False
+    func = kb["func"]
+    funcArgs = [self._keys] if wantKeys else []
+    funcKwargs = {}
+    funcArgs.extend(kb["extraArgs"])
+    funcKwargs.update(kb["extraKwargs"])
+    if self._debug:
+      print("Calling {}(*{}, **{})".format(func, funcArgs, funcKwargs))
+    return func(*funcArgs, **funcKwargs)
   # 1}}}
 
   @_verifyKeysAttr

@@ -22,6 +22,7 @@ a['x'][0] = <float32 x coordinate>
 
 from pyb3 import pybullet as p
 import os
+import re
 import sys
 import numpy as np
 import time
@@ -63,18 +64,24 @@ def withAlpha(c, a):
   return [c[0], c[1], c[2], a]
 # 0}}}
 
-# Utility functions for numpy {{{0
-def norm(v):
-  "Calculate the (Cartesian) length of the vector"
-  a = np.array(v)
-  return np.sqrt(np.sum(np.power(a, 2)))
-
-def unit(v):
+def unit(v): # {{{0
   "Convert v to a unit vector"
-  return np.divide(v, norm(v))
+  return np.divide(v, np.linalg.norm(v))
 # 0}}}
 
-# Camera/axis constants {{{0
+def V3(cx=0, cy=0, cz=0): # {{{0
+  return np.array((cx, cy, cz))
+# 0}}}
+
+# Axes, coordinates, vectors, etc {{{0
+
+V3_111 = V3(1, 1, 1)
+V3_000 = V3(0, 0, 0)
+
+# Axis vectors
+AXIS_X = V3(1, 0, 0)
+AXIS_Y = V3(0, 1, 0)
+AXIS_Z = V3(0, 0, 1)
 
 # Axis names
 CAM_AXIS_PITCH = "pitch"
@@ -92,11 +99,6 @@ CAM_NORTH = "-" + CAM_AXIS_Y
 CAM_SOUTH = "+" + CAM_AXIS_Y
 CAM_EAST = "+" + CAM_AXIS_X
 CAM_WEST = "-" + CAM_AXIS_X
-
-# Axis vectors
-AXIS_X = np.array([1, 0, 0])
-AXIS_Y = np.array([0, 1, 0])
-AXIS_Z = np.array([0, 0, 1])
 
 # Cardinal direction names to axis vectors
 CAM_AXES = {
@@ -122,7 +124,6 @@ CAM_AXIS_VECTORS = {
   CAM_AXIS_Y: AXIS_Y,
   CAM_AXIS_Z: AXIS_Z
 }
-
 # 0}}}
 
 def parseCameraSpec(spec, dfp, dfy, dfd, dft): # {{{0

@@ -18,12 +18,32 @@ class B3(object): # {{{0
   "Bullet constants and functions for those constants"
 
   @staticmethod
-  def getGeometryName(gom): # {{{1
+  def getConnectionName(c): # {{{1
+    "Get the pybullet constant for the given connect server type"
+    if c == p.SHARED_MEMORY:
+      return "SHARED_MEMORY"
+    if c == p.DIRECT:
+      return "DIRECT"
+    if c == p.GUI:
+      return "GUI"
+    if c == p.UDP:
+      return "UDP"
+    if c == p.TCP:
+      return "TCP"
+    if c == p.GUI_SERVER:
+      return "GUI_SERVER"
+    if c == p.GUI_MAIN_THREAD:
+      return "GUI_MAIN_THREAD"
+    if c == p.SHARED_MEMORY_SERVER:
+      return "SHARED_MEMORY_SERVER"
+    if c == p.SHARED_MEMORY_GUI:
+      return "SHARED_MEMORY_GUI"
+    return "UNKNOWN"
+  # 1}}}
+
+  @staticmethod
+  def getGeometryName(geom): # {{{1
     "Get the pybullet constant for the given geometry"
-    if geom == p.GEOM_FORCE_CONCAVE_TRIMESH:
-      return "GEOM_FORCE_CONCAVE_TRIMESH"
-    if geom == p.GEOM_CONCAVE_INTERNAL_EDGE:
-      return "GEOM_CONCAVE_INTERNAL_EDGE"
     if geom == p.GEOM_SPHERE:
       return "GEOM_SPHERE"
     if geom == p.GEOM_BOX:
@@ -38,6 +58,10 @@ class B3(object): # {{{0
       return "GEOM_CAPSULE"
     if geom == p.GEOM_HEIGHTFIELD:
       return "GEOM_HEIGHTFIELD"
+    if geom == p.GEOM_FORCE_CONCAVE_TRIMESH:
+      return "GEOM_FORCE_CONCAVE_TRIMESH"
+    if geom == p.GEOM_CONCAVE_INTERNAL_EDGE:
+      return "GEOM_CONCAVE_INTERNAL_EDGE"
     return "GEOM_UNKNOWN"
   # 1}}}
 
@@ -188,8 +212,14 @@ class BulletAppBase(object): # {{{0
       self._covValues[cov] = not self._covValues[cov]
     else:
       self._covValues[cov] = False
-    self.debug("Setting COV {} to {}".format(B3.getCovName(cov), self._covValues[cov]))
-    p.configureDebugVisualizer(cov, 1 if self._covValues[cov] else 0)
+    cv = self._covValues[cov]
+    self.debug("Setting COV {} to {}".format(B3.getCovName(cov), cv))
+    p.configureDebugVisualizer(cov, 1 if cv else 0)
+  # 1}}}
+
+  def covActive(self, cov): # {{{1
+    "Return whether or not the debug configuration option is active"
+    return self._covValues.get(cov, False)
   # 1}}}
 
   def hasArg(self, arg): # {{{1
@@ -207,33 +237,32 @@ class BulletAppBase(object): # {{{0
 
   def _do_connect(self, method, args=None): # {{{1
     "Private: connect to the Bullet server"
+    n = B3.getConnectionName(method)
     if args is None:
       result = p.connect(method)
-      self.debug("connect({})".format(method, result))
+      self.debug("connect(p.{})".format(n, result))
     else:
       result = p.connect(method, options=args)
-      self.debug("connect({}, options={!r}) = {}".format(method, args, result))
+      self.debug("connect(p.{}, options={!r}) = {}".format(n, args, result))
     return result
   # 1}}}
 
-  def isConnected(self): # {{{1
-    "Return whether or not we're connected"
-    return p.isConnected()
-  # 1}}}
-
-  def connect(self, *args, **kwargs): # {{{1
+  def connect(self, *args): # {{{1
     "Connect to the Bullet server, first trying shared memory, then GUI"
-    self.debug("request connect(*{}, **{})".format(args, kwargs))
     cargs = _merge(self._connectArgs[0], args)
-    ckwargs = _merge(self._connectArgs[1], kwargs)
-    self._server = self._do_connect(p.SHARED_MEMORY, *args, **kwargs)
+    self._server = self._do_connect(p.SHARED_MEMORY, *args)
     if self._server < 0:
-      self._server = self._do_connect(p.GUI, *args, **kwargs)
+      self._server = self._do_connect(p.GUI, *args)
     p.setInternalSimFlags(0)
     # Add standard debug config sliders
     self.addSlider("gravityX", -10, 10, self._defaultGravity["x"])
     self.addSlider("gravityY", -10, 10, self._defaultGravity["y"])
     self.addSlider("gravityZ", -10, 10, self._defaultGravity["z"])
+  # 1}}}
+
+  def isConnected(self): # {{{1
+    "Return whether or not we're connected"
+    return p.isConnected()
   # 1}}}
 
   def saveBullet(self, fname): # {{{1
@@ -248,11 +277,11 @@ class BulletAppBase(object): # {{{0
 
   def addSlider(self, name, min, max, dflt=None): # {{{1
     "Add user debug parameter"
-    ival = min
+    start = min
     if dflt is not None:
-      ival = dflt
-    self._debugConfigs[name] = p.addUserDebugParameter(name, min, max, ival)
-    self.debug("addDebug({!r}, min={}, max={}, ival={})".format(name, min, max, ival))
+      start = dflt
+    self._debugConfigs[name] = p.addUserDebugParameter(name, min, max, start)
+    self.debug("addDebug({!r}, min={}, max={}, start={})".format(name, min, max, start))
   # 1}}}
 
   def getSlider(self, name, tp=float): # {{{1
@@ -266,9 +295,8 @@ class BulletAppBase(object): # {{{0
     self.debug("addButton({!r})".format(name))
   # 1}}}
 
-  def getButton(self, name): # {{{1
+  def getButton(self, name): # TODO {{{1
     "Whether or not a button is currently pressed"
-    # TODO
     return None
     # return p.readUserDebugButton(self._debugConfigs[name])
   # 1}}}

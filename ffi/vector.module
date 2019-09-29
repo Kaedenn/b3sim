@@ -1,0 +1,60 @@
+
+# Vector module
+# This module (hopefully) defines a Vector3 type akin to the b3Vector type.
+# Note that this is an attempt: the module may not be usable in actual code.
+
+{
+  "name": "native_vector",
+  "cdef": """
+
+typedef long double m128_t;
+typedef float m32_t;
+
+typedef union vec3 {
+  m128_t m128;
+  struct {
+    m32_t x;
+    m32_t y;
+    m32_t z;
+  };
+} vec3_t;
+
+typedef union vec4 {
+  m128_t m128;
+  struct {
+    m32_t x;
+    m32_t y;
+    m32_t z;
+    m32_t w;
+  };
+} vec4_t;
+""",
+  "code": """
+
+typedef long double m128_t;
+typedef float m32_t;
+
+typedef union vec3 {
+  m128_t m128;
+  struct {
+    m32_t x;
+    m32_t y;
+    m32_t z;
+  };
+} vec3_t;
+
+typedef union vec4 {
+  m128_t m128;
+  struct {
+    m32_t x;
+    m32_t y;
+    m32_t z;
+    m32_t w;
+  };
+} vec4_t;
+""",
+  "extra_args": (),
+  "extra_kwargs": {}
+}
+
+# vim: set ts=2 sts=2 sw=2 et filetype=python:

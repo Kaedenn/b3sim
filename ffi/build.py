@@ -31,6 +31,7 @@ import ast
 import logging
 import os
 import sys
+import traceback
 
 import cffi
 FFI = cffi.FFI
@@ -71,7 +72,7 @@ def compile_module(name, cdef, code, *args, **kwargs):
   ffibuilder.compile(verbose=verbose, tmpdir=tmpdir)
 
 def parse_module(modfile):
-  "Parse .module file, returning name, code, args, and kwargs"
+  "Parse a module file"
   module = open(modfile).read()
   moddef = ast.literal_eval(module)
   logger.debug("Parsed module: {!r}".format(moddef))
@@ -114,10 +115,14 @@ if __name__ == "__main__":
 The following special modules are available: "xkeys".
   """)
   ACTIONS = ("build", "clean", "distclean", "list")
-  p.add_argument("module", nargs="+", help="module to compile (path or special module name)")
-  p.add_argument("-a", "--action", choices=ACTIONS, default="build", help="action to take")
-  p.add_argument("-v", "--verbose", action="store_true", help="verbose output")
-  p.add_argument("-t", default=os.path.dirname(sys.argv[0]), help="temporary directory")
+  p.add_argument("module", nargs="+",
+    help="module to compile (path or special module name)")
+  p.add_argument("-a", "--action", choices=ACTIONS, default="build",
+    help="action to perform")
+  p.add_argument("-v", "--verbose", action="store_true",
+    help="verbose output")
+  p.add_argument("-t", default=os.path.dirname(sys.argv[0]),
+    help="path to the temporary working directory")
   args = p.parse_args()
   modules = []
   if args.verbose:
@@ -126,18 +131,17 @@ The following special modules are available: "xkeys".
 
   # Gather module definitions
   for modfile in args.module:
-    if modfile == "xkeys":
-      logger.info("Building special xkeys module")
-      modules.append(special_xkeys_module())
-      continue
     try:
-      modules.append(parse_module(modfile))
+      if modfile == "xkeys":
+        modules.append(special_xkeys_module())
+      else:
+        modules.append(parse_module(modfile))
     except KeyError as e:
+      logger.error("Malformed module: {}".format(modfile))
       logger.exception(e)
-      logger.error("Invalid module {}; missing required attribute {}".format(modfile, e))
     except (IOError, ValueError) as e:
+      logger.error("Invalid module: {}".format(modfile))
       logger.exception(e)
-      logger.error("Invalid module {}: {}".format(modfile, e))
 
   # Perform requested action on module definitions
   for module in modules:
@@ -145,13 +149,13 @@ The following special modules are available: "xkeys".
     mcdef = module["cdef"]
     mcode = module["code"]
     margs = module["extra_args"]
-    mkwargs = module["extra_kwargs"]
-    logger.debug("Processing module {}...".format(mname))
+    mkwds = module["extra_kwargs"]
+    logger.info("Processing module {}...".format(mname))
     try:
       if args.action == "build":
         # Compile module
         logger.debug("Compiling module {}...".format(mname))
-        compile_module(mname, mcdef, mcode, tmpdir=args.t, *margs, **mkwargs)
+        compile_module(mname, mcdef, mcode, tmpdir=args.t, *margs, **mkwds)
         logger.info("Compiled module {} into {}".format(modfile, mname))
         # Move compiled objects into cwd
         for ext in ("a", "dll", "dylib", "so"):

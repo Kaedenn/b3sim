@@ -3,28 +3,36 @@
 """
 Wrapper module for pybullet
 
-Provides seamless APIs between different versions of the pybullet API.
+Provides seamless APIs between different versions of the pybullet API
 
 Recommended usage is one of the following:
   from pyb3 import pybullet
   from pyb3 import pybullet as p
 """
 
+import os
+import sys
+
 # pybullet TODO: {{{0
 # Support "Button" and "ComboBox" debug inputs
-#   Requires extensive changes to pybullet and PhysicsServerExample.cpp
+#   Requires extensive changes to pybullet and bullet examples API
 # Support callbacks for debug inputs (called on change)
 # Add the following functions/macros:
-#   Add via ctypes, defined in libBullet3Common:
-#     b3Scalar.h
-#   Add via wrapping logic to use C APIs:
-#     b3Transform.h
+#   Bullet3Common/b3Matrix3x3.h (numpy can replace)
+#   Bullet3Common/b3MinMax.h (implement in pure Python)
+#   Bullet3Common/b3Quaternion.h (numpy can replace)
+#   Bullet3Common/b3Scalar.h (numpy can replace)
+#   Bullet3Common/b3Transform.h (numpy can replace most)
+#   Bullet3Common/b3TransformUtil.h (numpy can replace most)
+#   Bullet3Common/b3Vector3.h (numpy can replace most)
+#   LinearMath/btAabbUtil2.h
+#   LinearMath/btConvexHull.h
+#   LinearMath/btGeometryUtil.h
+#   LinearMath/btMatrixX.h (numpy can replace)
 #   getCameraPosition
-#   Bullet3Common:
-#     b3Printf (vsprintf, b3Print)
-#     b3Print (done)
-#     b3Warning
-#     b3Error
+#   b3Print (done)
+#   b3Warning
+#   b3Error
 #   PhysicsServerExample.cpp
 #   b3ReferenceFrameHelper.hpp
 #     getPointWorldToLocal
@@ -95,7 +103,7 @@ try:
 except OSError:
   libc = ctypes.cdll.msvcrt
 
-# Ensure pybullet has the expected properties {{{0
+# Ensure pybullet has expected properties
 def _ensurePybulletProperty(name, val):
   "Ensure pybullet has the given attribute with the given value"
   if not hasattr(pybullet, name):
@@ -136,29 +144,36 @@ _ensurePybulletProperty("B3G_KP_7", pybullet.B3G_KP_HOME)
 _ensurePybulletProperty("B3G_KP_8", pybullet.B3G_KP_UP)
 _ensurePybulletProperty("B3G_KP_9", pybullet.B3G_KP_PGUP)
 del _ensurePybulletProperty
-# 0}}}
 
-def polyfill_b3Print(msg, eol="\n"):
-  "Polyfilled b3Print function implemented in pure Python"
-  sys.stdout.write(msg)
-  if eol:
-    sys.stdout.write(eol)
-
-def polyfill_b3Printf(fmt, *args):
-  "Polyfilled b3Printf function implemented in pure Python"
-  from _printf import ffi, lib
-  try:
-    b3Print = pybullet.b3Print
-  except AttributeError:
-    b3Print = polyfill_b3Print
-
-# Ensure pybullet has b3Print
+# b3Print
 if not hasattr(pybullet, "b3Print"):
-  pybullet.b3Print = polyfill_b3Print
+  def b3Print(msg, eol="\n"):
+    "Polyfilled b3Print function implemented in pure Python"
+    sys.stdout.write(msg)
+    if eol:
+      sys.stdout.write(eol)
+  pybullet.b3Print = b3Print
 
-# Ensure pybullet as b3Printf
-if not hasattr(pybullet, 'b3Printf'):
-  pybullet.b3Printf = polyfill_b3Printf
+# NotConnectedError
+if not hasattr(pybullet, "NotConnectedError"):
+  class NotConnectedError(pybullet.error):
+    "Polyfilled NotConnectedError"
+    pass
+  pybullet.NotConnectedError = NotConnectedError
+
+# addUserDebugButton
+if not hasattr(pybullet, "addUserDebugButton"):
+  def addUserDebugButton(*args, **kwargs):
+    "Stub function for an unimplemented feature"
+    raise NotImplementedError()
+  pybullet.addUserDebugButton = addUserDebugButton
+
+# readUserDebugButton
+if not hasattr(pybullet, "readUserDebugButton"):
+  def readUserDebugButton(*args, **kwargs):
+    "Stub function for an unimplemented feature"
+    raise NotImplementedError()
+  pybullet.readUserDebugButton = readUserDebugButton
 
 # vim: set ts=2 sts=2 sw=2 et:
 
