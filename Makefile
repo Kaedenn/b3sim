@@ -1,5 +1,5 @@
 
-SRCFILES = $(wildcard *.py)
+SRCFILES = $(wildcard *.py) $(wildcard ffi/*.py)
 
 FFI_MODULES = xkeys $(wildcard ffi/*.module)
 
@@ -12,6 +12,7 @@ ffi:
 
 clean:
 	-rm *.pyc
+	-rm ffi/*.pyc
 	python ffi/build.py -a clean $(FFI_MODULES)
 
 distclean:

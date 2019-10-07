@@ -12,6 +12,13 @@ import sys
 from pyb3 import pybullet as p
 from utility import *
 
+def _name(obj, name): # {{{0
+  "Determine what name to use for obj"
+  if name is None:
+    return obj.__class__.__name__.replace("Scenario", "")
+  return name
+# 0}}}
+
 class ScenarioBase(object): # {{{0
   """Scenario base class
 
@@ -44,18 +51,18 @@ class ScenarioBase(object): # {{{0
 
   def get(self, k, default=None, typeclass=None):
     "Get a value from self.args"
-    val = self._args.get(k, default)
+    val = self.args.get(k, default)
     if typeclass is not None:
       return typeclass(val)
     return val
 
   def set(self, k, v):
     "Set a key to a value in self.args"
-    self._args[k] = v
+    self.args[k] = v
 
   def has(self, k):
     "Determine if self.args has a given key"
-    return k in self._args
+    return k in self.args
 
   def _applyTransforms(self, app, objs):
     "Apply requested transformations on the objects"
@@ -96,16 +103,11 @@ class ScenarioBase(object): # {{{0
     return "Scenario({!r}, {!r})".format(self._name, self._args)
 # 0}}}
 
-def _name(obj, name): # {{{0
-  "Determine what name to use for obj"
-  if name is None:
-    return obj.__class__.__name__.replace("Scenario", "")
-  return name
-# 0}}}
-
 class EmptyPlaneScenario(ScenarioBase): # {{{0
   """
   Create an empty plane
+    width, length: app.worldSizeMax() * app.worldSize()
+    thickness: app.wallThickness()
   """
   def __init__(self, name=None, **kwargs):
     super(EmptyPlaneScenario, self).__init__(_name(self, name), **kwargs)
@@ -115,10 +117,9 @@ class EmptyPlaneScenario(ScenarioBase): # {{{0
     pos = app.worldFloor()
     wt = np.float(app.wallThickness())
     ws = np.float(app.worldSize())
-    exts = [app.worldSizeMax()*ws+wt, app.worldSizeMax()*ws+wt, wt]
-    color = (1, 1, 1, 1)
-    b = app.createBox(mass=0, pos=pos, exts=exts, rgba=color, restitution=1)
-    objs.append(b)
+    wsm = np.float(app.worldSizeMax())
+    exts = wsm * ws * V3(1, 1, 0) + wt * V3(1, 1, 1)
+    objs.append(app.createBox(mass=0, pos=pos, exts=exts, rgba=C4_WHT, restitution=1))
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -239,7 +240,7 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
     b3e = V3(n*bd/2, n*bd/2, bh/8)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
-    bz = lambda i: i * bh
+    bz = lambda i: bh * i
     boxes = []
     for k in range(layers):
       for i in range(n):

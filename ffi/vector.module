@@ -10,6 +10,8 @@
 typedef long double m128_t;
 typedef float m32_t;
 
+static const m32_t VEC_EPSILON;
+
 typedef union vec3 {
   m128_t m128;
   struct {
@@ -28,12 +30,27 @@ typedef union vec4 {
     m32_t w;
   };
 } vec4_t;
+
 """,
   "code": """
 
 typedef long double m128_t;
 typedef float m32_t;
 
+#ifdef __FLT_EPSILON__
+static const m32_t VEC_EPSILON = __FLT_EPSILON__;
+#else
+#warn Missing __FLT_EPSILON__; using hard-coded value
+static const m32_t VEC_EPSILON = 1.0e-6;
+#endif
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) < (b) ? (b) : (a))
+#endif
+
 typedef union vec3 {
   m128_t m128;
   struct {
@@ -52,6 +69,7 @@ typedef union vec4 {
     m32_t w;
   };
 } vec4_t;
+
 """,
   "extra_args": (),
   "extra_kwargs": {}

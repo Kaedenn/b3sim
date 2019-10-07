@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 # 0}}}
 
 # Keybind help text {{{0
-# Unused: b e f n q r t u x y z , . / 1 2 3 4 5 6 7 8 9 0 Num1 Num3
+# Unused: b e f n q r t u x y z , 1 2 3 4 5 6 7 8 9 0 Num1 Num3
 # Broken: c i j k l o
 KEYBIND_HELP_TEXT = ur"""Available keybinds:
 h       Display keybind help (this list)
@@ -38,6 +38,7 @@ b       Print entire body list
 ?       Print camera/target information
 `       Toggle built-in keyboard shortcuts
 \       Pause/resume simulation
+.       Advance simulation by one timestep
 F1      Render scene to a file
 Escape  Close simulation
 
@@ -367,6 +368,20 @@ class Simulation(BulletAppBase):
       self._addGrid()
   # 0}}}
 
+  def dropBody(self):
+    "Drop an object onto the pile of things"
+    m = self.objectMass() * 100
+    r = 0.5
+    z = self.worldSize() - 4*self.wallThickness() - 2*r
+    self._bodies.add(self.createSphere(m, V3(0, 0, z), radius=r))
+
+  def fireProjectile(self, size=0.25, mass=1, speed=10):
+    ci = self.getCamera()
+    vel = ci["camForward"] * speed
+    s = self.createSphere(mass, self.getCameraPos(), radius=size)
+    p.resetBaseVelocity(s, linearVelocity=vel)
+    self._bodies.add(s)
+
   def reset(self): # {{{0
     "Reset the entire simulation"
     self.debug("Resetting simulation")
@@ -384,6 +399,8 @@ class Simulation(BulletAppBase):
       self.setRealTime(True)
     logger.debug("Reset simulation")
   # 0}}}
+
+### Global functions: input handling ###
 
 def onKeyHelp(app): # {{{0
   "Print help information"
@@ -504,35 +521,148 @@ def onToggleCov(app, cov, dflt=False): # {{{0
   logger.info("Set COV {} to {}".format(B3.getCovName(cov), app.covActive(cov)))
 # 0}}}
 
-def mainLoop(args, a, kbm): # {{{0
-  "Main loop: process key events, mouse events, and changes to GUI settings"
-  tickCounter = 0
-  startTime = monotonic()
-  getTickTime = lambda f: startTime + INPUT_SLEEP * f
-  try:
-    while a.isConnected():
-      tickCounter += 1
-      # Handle key events
-      with kbm:
-        if args.debug:
-          kbm.debugDumpKeys()
-      #for e in p.getMouseEvents():
-      #  tp, mx, my, bi, bs = e
-      #  print(e)
-      # Update continuous variables
-      a.updateGravity()
-      # Sleep until the next tick
-      nextTickTime = getTickTime(tickCounter + 1)
-      dt = nextTickTime - monotonic()
-      if dt > 0:
-        time.sleep(dt)
-  except p.NotConnectedError:
-    pass
-  except p.error as e:
-    logger.exception(e)
-# 0}}}
-
 ### Driver: argument parsing, initialization, keybinds ###
+
+class SimulationDriver(object):
+  """
+  Simulation driver class
+  """
+  def __init__(self, args, remainder):
+    self.args = args
+    self.remainder = remainder
+
+    app_args = self._gatherSimArgs()
+    self.app = Simulation(args.num, **app_args)
+    self.app.setCamera(**self._parseCameraArg(args.cam))
+    self.app.reset()
+
+    self.app.toggleCov(p.COV_ENABLE_RGB_BUFFER_PREVIEW, False)
+    self.app.toggleCov(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, False)
+    self.app.toggleCov(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, False)
+
+    self.kbm = self._setupKeyBinds()
+
+    if not args.noloop:
+      self._loop()
+
+  def _gatherBulletArgs(self):
+    "Gather the arguments to pass to pybullet.connect"
+    # Determine the arguments to pass to pybullet.connect
+    simArgs = []
+    if self.args.width:
+      simArgs.append("--width={}".format(self.args.width))
+    if self.args.height:
+      simArgs.append("--height={}".format(self.args.height))
+    if not self.args.gui:
+      simArgs.append("--nogui")
+
+    # Determine background color arguments
+    cr, cg, cb = self.args.bgr, self.args.bgg, self.args.bgb
+    if self.args.bg:
+      if self.args.bg[0] == '#' and len(self.args.bg) == 7:
+        rv, gv, bv = self.args.bg[1:3], self.args.bg[3:5], self.args.bg[5:7]
+        cr = int("0x" + rv) * 1.0 / 256
+        cg = int("0x" + gv) * 1.0 / 256
+        cb = int("0x" + bv) * 1.0 / 256
+      elif self.args.bg.count(",") == 2:
+        cr, cg, cb = map(float, self.args.bg.split(","))
+      else:
+        logger.error("Failed parsing --bg {!r}; ignoring".format(self.args.bg))
+    if cr is not None:
+      simArgs.append("--background_color_red={}".format(cr))
+    if cg is not None:
+      simArgs.append("--background_color_green={}".format(cg))
+    if cb is not None:
+      simArgs.append("--background_color_blue={}".format(cb))
+
+    simArgs.extend(self.remainder)
+    return simArgs
+
+  def _gatherSimArgs(self):
+    "Gather the arguments to pass to the simulation"
+    extraKwargs = {}
+    if self.args.config is not None:
+      for val in self.args.config:
+        if "=" in val:
+          k, v = val.split("=", 1)
+          extraKwargs[k] = v
+        else:
+          extraKwargs[val] = True
+    if self.args.debug:
+      extraKwargs["debug"] = True
+    if self.args.frozen:
+      extraKwargs["frozen"] = True
+    if self.args.radius is not None:
+      extraKwargs["objectRadius"] = self.args.radius
+    if self.args.mass is not None:
+      extraKwargs["objectMass"] = self.args.mass
+    extraKwargs["cdp"] = self.args.cdp
+    extraKwargs["cdy"] = self.args.cdy
+    extraKwargs["cdd"] = self.args.cdd
+    extraKwargs["cdtx"] = self.args.cdtx
+    extraKwargs["cdty"] = self.args.cdty
+    extraKwargs["cdtz"] = self.args.cdtz
+    extraKwargs["connectArgs"] = " ".join(gatherBulletArgs(self.args, self.remainder))
+    if self.args.save:
+      extraKwargs["save"] = self.args.save
+    if self.args.load:
+      extraKwargs["load"] = self.args.load
+    return extraKwargs
+
+  def _parseCameraArg(self, arg):
+    "Parse the --cam argument"
+    cstart = (CAM_START_PITCH, CAM_START_YAW, CAM_START_DIST, CAM_START_TARGET)
+    cinfo = parseCameraSpec(arg, *cstart)
+    return {
+      "pitch": cinfo[0],
+      "yaw": cinfo[1],
+      "distance": cinfo[2],
+      "target": cinfo[3]
+    }
+
+  def _setupKeyBinds(self):
+    "Create the keypress manager and register keypress events"
+    kbm = KeyPressManager(self.app, debug=self.args.debug)
+    onMove = lambda keys: onMovementKey(self.app, keys)
+    for key in KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD:
+      kbm.bind(key, onMove, keys=True, repeat=True)
+    kbm.bind(" ", lambda: self.app.reset())
+    kbm.bind("h", lambda: onKeyHelp(self.app))
+    kbm.bind("b", lambda: onKeyDump(self.app))
+    kbm.bind("/", lambda keys: onKeyStatus(self.app, keys), keys=True)
+    kbm.bind(".", lambda: self.app.stepSim(), repeat=True)
+    kbm.bind("m", lambda: onToggleCov(self.app, p.COV_ENABLE_MOUSE_PICKING, dflt=True))
+    kbm.bind("`", lambda: onToggleCov(self.app, p.COV_ENABLE_KEYBOARD_SHORTCUTS, dflt=True))
+    kbm.bind("\\", lambda: self.app.toggleSim())
+    kbm.bind("f", lambda: self.app.fireProjectile())
+    return kbm
+
+  def _loop(self):
+    "Main loop: process key events, mouse events, and changes to GUI settings"
+    tickCounter = 0
+    startTime = monotonic()
+    getTickTime = lambda f: startTime + INPUT_SLEEP * f
+    try:
+      while self.app.isConnected():
+        tickCounter += 1
+        # Handle key events
+        with self.kbm:
+          if self.args.debug:
+            self.kbm.debugDumpKeys()
+        #for e in p.getMouseEvents():
+        #  tp, mx, my, bi, bs = e
+        #  print(e)
+        # Update continuous variables
+        self.app.updateGravity()
+        # Sleep until the next tick
+        nextTickTime = getTickTime(tickCounter + 1)
+        dt = nextTickTime - monotonic()
+        if dt > 0:
+          time.sleep(dt)
+    except p.NotConnectedError:
+      pass
+    except p.error as e:
+      logger.exception(e)
 
 def parseArgs(): # {{{0
   # Parse arguments
@@ -600,6 +730,34 @@ will prevent some keybinds (pause, reset) from working.""",
   if args.debug:
     logger.setLevel(logging.DEBUG)
   return args, remainder
+# 0}}}
+
+def mainLoop(args, a, kbm): # {{{0
+  "Main loop: process key events, mouse events, and changes to GUI settings"
+  tickCounter = 0
+  startTime = monotonic()
+  getTickTime = lambda f: startTime + INPUT_SLEEP * f
+  try:
+    while a.isConnected():
+      tickCounter += 1
+      # Handle key events
+      with kbm:
+        if args.debug:
+          kbm.debugDumpKeys()
+      #for e in p.getMouseEvents():
+      #  tp, mx, my, bi, bs = e
+      #  print(e)
+      # Update continuous variables
+      a.updateGravity()
+      # Sleep until the next tick
+      nextTickTime = getTickTime(tickCounter + 1)
+      dt = nextTickTime - monotonic()
+      if dt > 0:
+        time.sleep(dt)
+  except p.NotConnectedError:
+    pass
+  except p.error as e:
+    logger.exception(e)
 # 0}}}
 
 def gatherBulletArgs(args, remainder): # {{{0
@@ -693,6 +851,7 @@ def setupKeyBinds(a): # {{{0
   kbm.bind("m", lambda: onToggleCov(a, p.COV_ENABLE_MOUSE_PICKING, dflt=True))
   kbm.bind("`", lambda: onToggleCov(a, p.COV_ENABLE_KEYBOARD_SHORTCUTS, dflt=True))
   kbm.bind("\\", lambda: a.toggleSim())
+  kbm.bind("f", lambda: a.fireProjectile())
   return kbm
 # 0}}}
 
@@ -703,6 +862,9 @@ if __name__ == "__main__": # {{{0
 
   # Parse sys.argv
   args, remainder = parseArgs()
+
+  driver = SimulationDriver(args, remainder)
+  raise SystemExit(0)
 
   # Construct the simulation
   app = Simulation(args.num, **gatherSimArgs(args, remainder))
