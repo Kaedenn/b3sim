@@ -49,6 +49,11 @@ KEY_CLASS_LETTERS_UC = tuple(string.ascii_uppercase)
 # Letters, lower-case and upper-case
 KEY_CLASS_LETTERS = tuple(string.ascii_letters)
 
+# Function keys
+KEY_CLASS_FN = (
+  p.B3G_F1, p.B3G_F2, p.B3G_F3, p.B3G_F4, p.B3G_F5, p.B3G_F6,
+  p.B3G_F7, p.B3G_F8, p.B3G_F9, p.B3G_F10, p.B3G_F11, p.B3G_F12)
+
 def getKeyStateString(state): # {{{0
   "Obtain a string describing the state code"
   s = []
@@ -126,6 +131,13 @@ class KeyPressManager(object): # {{{0
     self._debug = kwargs.get("debug", False)
   # 1}}}
 
+  def _parseKey(self, key): # {{{1
+    "Covert a key to a value understood by Bullet"
+    if key[0] == 'F' and key[1:].isdigit() and 1 <= int(key[1:]) <= 12:
+      return p.B3G_F1 + int(key[1:]) - 1
+    return key
+  # 1}}}
+
   def bind(self, key, func, # {{{1
            timeout=0,
            keys=None,
@@ -169,11 +181,9 @@ class KeyPressManager(object): # {{{0
     self._binds.append(kb)
   # 1}}}
 
-  def bindAll(self, keyCodes, func, *args, **kwargs): # {{{1
-    """Bind a list/tuple of keys to a function
-    See documentation for self.bind
-    """
-    for k in keyCodes:
+  def bindAll(self, keys, func, *args, **kwargs): # {{{1
+    """Bind a list/tuple of keys to a function (see self.bind) """
+    for k in keys:
       self.bind(k, func, *args, **kwargs)
   # 1}}}
 
