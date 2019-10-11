@@ -1,21 +1,24 @@
 
-SRCFILES = $(wildcard *.py) $(wildcard ffi/*.py)
+BASEDIR ?= .
+PYFILES := $(shell find $(BASEDIR) -name '*.py')
 
-FFI_MODULES = xkeys $(wildcard ffi/*.module)
+FFI_MODULES = xkeys $(wildcard $(BASEDIR)/ffi/*.module)
+FFI_BUILD = $(BASEDIR)/ffi/build.py
 
 .PHONY: all ffi clean distclean
 
 all: ffi
 
 ffi:
-	python ffi/build.py $(FFI_MODULES)
+	python $(FFI_BUILD) $(FFI_MODULES)
 
 clean:
-	-rm *.pyc
-	-rm ffi/*.pyc
-	python ffi/build.py -a clean $(FFI_MODULES)
+	-rm $(patsubst %.py,%.pyc,$(PYFILES)) 2>/dev/null
+	-rmdir __pycache__
+	python $(FFI_BUILD) -a clean $(FFI_MODULES)
 
 distclean:
-	-rm *.pyc
-	python ffi/build.py -a distclean $(FFI_MODULES)
+	-rm $(patsubst %.py,%.pyc,$(PYFILES)) 2>/dev/null
+	-rmdir __pycache__
+	python $(FFI_BUILD) -a distclean $(FFI_MODULES)
 
