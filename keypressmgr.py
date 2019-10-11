@@ -182,7 +182,7 @@ class KeyPressManager(object): # {{{0
   # 1}}}
 
   def bindAll(self, keys, func, *args, **kwargs): # {{{1
-    """Bind a list/tuple of keys to a function (see self.bind) """
+    "Bind a list/tuple of keys to a function (see self.bind)"
     for k in keys:
       self.bind(k, func, *args, **kwargs)
   # 1}}}
