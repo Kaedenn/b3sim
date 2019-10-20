@@ -1,21 +1,31 @@
 #!/usr/bin/env python
 
 """
-Base and utility classes for a pybullet simulation
+PyBullet Simulation: Base Class API
+
+This module defines a base class and a utility class for pybullet simulations.
+Simulation modules can inherit from BulletAppBase to simplify the (rather
+complex) pybullet API.
+
+Note that all references to pybullet must be done through the pyb3 module in
+order to provide compatibility across different versions of the pybullet API.
 """
 
 # TODO:
 # readUserDebugButton
 # clearUserDebugButton (or some way to reset it)
 
+import pyb3
 from pyb3 import pybullet as p
 from utility import *
+
+logger = pyb3.getLogger()
 
 # Only export the classes, not the modules
 __all__ = ["B3", "BulletAppBase"]
 
 class B3(object): # {{{0
-  "Bullet constants and functions for those constants"
+  "Functions for mapping constants to strings and strings to constants"
 
   @staticmethod
   def getConnectionName(c): # {{{1
@@ -138,6 +148,10 @@ def _merge(v1, v2): # {{{0
       v.update(v2)
     else:
       v = v1 + v2
+  elif v1 is None:
+    v = v2
+  elif v2 is None:
+    v = v1
   return v
 # 0}}}
 
@@ -148,11 +162,11 @@ def _or(v, d): # {{{0
   return d
 # 0}}}
 
-class BulletAppBase(object): # {{{0
+class BulletAppBase(object):
   "Base class for pybullet simulations"
   def __init__(self, connect=False, # {{{1
+               engineParams=None,
                connectArgs=None,
-               connectKwargs=None,
                createBodyArgs=None,
                createBodyKwargs=None,
                createCollisionArgs=None,
@@ -162,10 +176,10 @@ class BulletAppBase(object): # {{{0
                **kwargs):
     """
     Extra keyword arguments:
-      debug:        enable some debug output (False)
-      gravityX:     default gravity for x (0)
-      gravityY:     default gravity for y (0)
-      gravityZ:     default gravity for z (-8)
+      debug         enable some debug output (False)
+      gravityX      default gravity for x (0)
+      gravityY      default gravity for y (0)
+      gravityZ      default gravity for z (-9.8)
     """
     self._debug = getRemove(kwargs, "debug", False)
     self._defaultGravity = {
@@ -174,15 +188,15 @@ class BulletAppBase(object): # {{{0
       "z": getRemove(kwargs, "gravityZ", -9.8, float)
     }
     self._server = None
+    self._stateLogger = None
     self._bodies = set()
     self._colliders = set()
     self._visualShapes = set()
     self._covValues = {}
     self._debugConfigs = {}
     self._args = kwargs
-    self._connectArgs = (
-        _or(connectArgs, ()),
-        _or(connectKwargs, {}))
+    self._engineParams = _or(engineParams, {})
+    self._connectArgs = _or(connectArgs, "")
     self._createBodyArgs = (
         _or(createBodyArgs, ()),
         _or(createBodyKwargs, {}))
@@ -196,14 +210,6 @@ class BulletAppBase(object): # {{{0
       self.connect()
   # 1}}}
 
-  def debug(self, m): # {{{1
-    "Print a debug message, if debugging is enabled"
-    if self._debug:
-      sys.stderr.write("BulletAppBase: DEBUG: ")
-      sys.stderr.write(m.strip())
-      sys.stderr.write("\n")
-  # 1}}}
-
   def toggleCov(self, cov, forceValue=None): # {{{1
     "Toggle a debug configuration option"
     if forceValue is not None:
@@ -213,8 +219,9 @@ class BulletAppBase(object): # {{{0
     else:
       self._covValues[cov] = False
     cv = self._covValues[cov]
-    self.debug("Setting COV {} to {}".format(B3.getCovName(cov), cv))
+    logger.debug("Setting COV {} to {}".format(B3.getCovName(cov), cv))
     p.configureDebugVisualizer(cov, 1 if cv else 0)
+    return cv
   # 1}}}
 
   def covActive(self, cov): # {{{1
@@ -235,29 +242,31 @@ class BulletAppBase(object): # {{{0
     return val
   # 1}}}
 
-  def _do_connect(self, method, args=None): # {{{1
-    "Private: connect to the Bullet server"
-    n = B3.getConnectionName(method)
-    if args is None:
-      result = p.connect(method)
-      self.debug("connect(p.{})".format(n, result))
-    else:
-      result = p.connect(method, options=args)
-      self.debug("connect(p.{}, options={!r}) = {}".format(n, args, result))
-    return result
-  # 1}}}
+  def connect(self, args=None): # {{{1
+    "Start the shared memory server and GUI client"
+    # Collect arguments to pass to connect()
+    def parseArgObj(argobj):
+      if isinstance(argobj, basestring):
+        return argobj.split()
+      elif argobj:
+        return argobj
+      return []
+    cargs = []
+    cargs.extend(parseArgObj(self._connectArgs))
+    cargs.extend(parseArgObj(args))
+    cargs = " ".join(cargs)
 
-  def connect(self, *args): # {{{1
-    "Connect to the Bullet server, first trying shared memory, then GUI"
-    cargs = _merge(self._connectArgs[0], args)
-    self._server = self._do_connect(p.SHARED_MEMORY, *args)
-    if self._server < 0:
-      self._server = self._do_connect(p.GUI, *args)
+    # Start shared memory server and GUI client
+    logger.debug("Starting SHARED_MEMORY server: {}".format(cargs))
+    self._server_shm = p.connect(p.SHARED_MEMORY, options=cargs)
+    logger.debug("Starting GUI server: {}".format(cargs))
+    self._server = p.connect(p.GUI, options=cargs)
     p.setInternalSimFlags(0)
+
     # Add standard debug config sliders
-    self.addSlider("gravityX", -10, 10, self._defaultGravity["x"])
-    self.addSlider("gravityY", -10, 10, self._defaultGravity["y"])
-    self.addSlider("gravityZ", -10, 10, self._defaultGravity["z"])
+    self.addSlider("Gravity X", -10, 10, self._defaultGravity["x"])
+    self.addSlider("Gravity Y", -10, 10, self._defaultGravity["y"])
+    self.addSlider("Gravity Z", -10, 10, self._defaultGravity["z"])
   # 1}}}
 
   def isConnected(self): # {{{1
@@ -277,11 +286,9 @@ class BulletAppBase(object): # {{{0
 
   def addSlider(self, name, min, max, dflt=None): # {{{1
     "Add user debug parameter"
-    start = min
-    if dflt is not None:
-      start = dflt
+    start = min if dflt is None else dflt
     self._debugConfigs[name] = p.addUserDebugParameter(name, min, max, start)
-    self.debug("addDebug({!r}, min={}, max={}, start={})".format(name, min, max, start))
+    logger.debug("addDebug({!r}, min={}, max={}, start={})".format(name, min, max, start))
   # 1}}}
 
   def getSlider(self, name, tp=float): # {{{1
@@ -289,44 +296,63 @@ class BulletAppBase(object): # {{{0
     return tp(p.readUserDebugParameter(self._debugConfigs[name]))
   # 1}}}
 
-  def addButton(self, name, state=False): # {{{1
+  def addButton(self, name): # {{{1
     "Add a button parameter"
-    self._debugConfigs[name] = p.addUserDebugButton(name, isTrigger=state)
-    self.debug("addButton({!r})".format(name))
+    try:
+      self._debugConfigs[name] = p.addUserDebugButton(name)
+    except NotImplementedError as e:
+      logger.error(e)
   # 1}}}
 
-  def getButton(self, name): # TODO {{{1
-    "Whether or not a button is currently pressed"
-    return None
-    # return p.readUserDebugButton(self._debugConfigs[name])
+  def getButton(self, name): # {{{1
+    "If the button has been triggered since last reset"
+    try:
+      return p.readUserDebugButton(self._debugConfigs[name])
+    except NotImplementedError as e:
+      logger.error(e)
+  # 1}}}
+
+  def resetButton(self, name): # {{{1
+    "Reset a button to un-triggered"
+    try:
+      p.resetUserDebugButton(self._debugConfigs[name])
+    except NotImplementedError as e:
+      logger.error(e)
   # 1}}}
 
   def updateGravity(self): # {{{1
     "Apply gravity debug configuration values"
-    gx = self.getSlider("gravityX")
-    gy = self.getSlider("gravityY")
-    gz = self.getSlider("gravityZ")
+    gx = self.getSlider("Gravity X")
+    gy = self.getSlider("Gravity Y")
+    gz = self.getSlider("Gravity Z")
     p.setGravity(gx, gy, gz)
-  # 1}}}
-
-  def loadURDF(self, path, *args, **kwargs): # {{{1
-    "Load object defined by the URDF file"
-    idx = p.loadURDF(path, useMaximalCoordinates=True, *args, **kwargs)
-    assertSuccess(idx, "createVisualShape")
-    self._bodies.add(idx)
-    return idx
   # 1}}}
 
   def reset(self): # {{{1
     "Reset simulation"
     p.resetSimulation()
     iterations = self.getArg("numSolverIterations", 10)
-    p.setPhysicsEngineParameter(numSolverIterations = iterations)
+    p.setPhysicsEngineParameter(numSolverIterations=iterations)
     contactBreaking = self.getArg("contactBreakingThreshold", 0.001)
-    p.setPhysicsEngineParameter(contactBreakingThreshold = contactBreaking)
+    p.setPhysicsEngineParameter(contactBreakingThreshold=contactBreaking)
+    if self._engineParams:
+      logger.debug("Applying engine parameters: {}".format(self._engineParams))
+      p.setPhysicsEngineParameter(**self._engineParams)
+    try:
+      if self._debug:
+        p.setPhysicsEngineParameter(verboseMode=1)
+    except (TypeError, p.error) as e:
+      # Unimplemented; ignore it
+      pass
     self._bodies = set()
     self._colliders = set()
     self._visualShapes = set()
+    if self._stateLogger is not None:
+      p.stopStateLogging(self._stateLogger)
+      p._stateLogger = None
+    if self.hasArg("mp4"):
+      f = self.getArg("mp4")
+      self._stateLogger = p.startStateLogging(p.STATE_LOGGING_VIDEO_MP4, f)
   # 1}}}
 
   def setRendering(self, enable=True): # {{{1
@@ -358,6 +384,8 @@ class BulletAppBase(object): # {{{0
     "Advance the simulation by one step"
     p.stepSimulation()
   # 1}}}
+
+  # Camera functions:
 
   def getCamera(self, val=None): # {{{1
     """
@@ -462,6 +490,8 @@ class BulletAppBase(object): # {{{0
     return ci[CAM_AXIS_TARGET] - ci["camForward"] * ci[CAM_AXIS_DIST]
   # 1}}}
 
+  # Body information:
+
   def getBodyDynamics(self, oid, link=-1): # {{{1
     "Return dynamics information about the object"
     oi = p.getDynamicsInfo(oid, -1)
@@ -537,23 +567,7 @@ class BulletAppBase(object): # {{{0
       yield bid
   # 1}}}
 
-  # FIXME: Doesn't work somehow?
-  def getWorldExtrema(self): # {{{1
-    "Return the smallest AABB containing all objects"
-    worldMin = [None, None, None]
-    worldMax = [None, None, None]
-    points = []
-    for a, b in [self.getAABB(bidx) for bidx in self.getBodies()]:
-      points.append(a)
-      points.append(b)
-    worldMin[0] = min(p[0] for p in points)
-    worldMax[0] = max(p[0] for p in points)
-    worldMin[1] = min(p[1] for p in points)
-    worldMax[1] = max(p[1] for p in points)
-    worldMin[2] = min(p[2] for p in points)
-    worldMax[2] = max(p[2] for p in points)
-    return (np.array(worldMin), np.array(worldMax))
-  # 1}}}
+  # Object creation:
 
   def createCollision(self, *args, **kwargs): # {{{1
     "Create a collision shape, asserting success"
@@ -570,6 +584,7 @@ class BulletAppBase(object): # {{{0
     r = getRemove(kwargs, "restitution", 0, float)
     bargs = _merge(self._createBodyArgs[0], args)
     bkwargs = _merge(self._createBodyArgs[1], kwargs)
+    logger.debug("p.createMultiBody(*{}, **{})".format(bargs, bkwargs))
     b = p.createMultiBody(*bargs, **bkwargs)
     assertSuccess(b, "createMultiBody")
     if r != 0:
@@ -629,10 +644,11 @@ class BulletAppBase(object): # {{{0
     return self.createMultiBody(mass, cid, vid, pos, **kwargs)
   # 1}}}
 
-  def loadSoftBody(self, path, pos=None, orn=None, scale=None, mass=None): # {{{1
+  def loadSoftBody(self, path, pos=None, orn=None, scale=None, mass=None, # {{{1
+                   margin=None):
     "Load a soft body into the world"
     if not hasattr(p, "loadSoftBody"):
-      sys.stderr.write("pybullet error: loadSoftBody is not available\n")
+      logger.error("pybullet error: loadSoftBody is not available\n")
       return None
     args = {}
     if pos is not None:
@@ -643,22 +659,34 @@ class BulletAppBase(object): # {{{0
       args["scale"] = scale
     if mass is not None:
       args["mass"] = mass
-    ret = p.loadSoftBody(path, collisionMargin=0.5, **args)
-    assertSuccess(ret, "loadSoftBody")
+    if margin is not None:
+      args["collisionMargin"] = margin
+    ret = assertSuccess(p.loadSoftBody(path, **args), "loadSoftBody")
     self._bodies.add(ret)
     return ret
   # 1}}}
 
+  def loadURDF(self, path, *args, **kwargs): # {{{1
+    "Load object defined by the URDF file"
+    idx = p.loadURDF(path, useMaximalCoordinates=True, *args, **kwargs)
+    assertSuccess(idx, "loadURDF")
+    self._bodies.add(idx)
+    return idx
+  # 1}}}
+
   def setBodyColor(self, idx, rgba): # {{{1
     "Change a body's color to the given 4-tuple"
-    p.changeVisualShape(idx, -1, rgbaColor=list(rgba))
+    color = list(rgba)
+    if len(color) == 3:
+      color.append(1)
+    p.changeVisualShape(idx, -1, rgbaColor=color)
   # 1}}}
+
+  # Debug interfaces:
 
   def drawLine(self, p1, p2, thickness=1, color=None): # {{{1
     "Draw a line from p1 to p2"
-    c = color
-    if color is None:
-      c = [0, 0, 0]
+    c = C3_BLK if color is None else color
     p.addUserDebugLine(p1, p2, c, thickness)
   # 1}}}
 
@@ -670,7 +698,6 @@ class BulletAppBase(object): # {{{0
       kwargs["textSize"] = size
     p.addUserDebugText(t, pt, **kwargs)
   # 1}}}
-# 0}}}
 
 # vim: set ts=2 sts=2 sw=2 et:
 

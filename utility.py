@@ -11,10 +11,9 @@ Axes:
   +Z is up
   -Z is down
 
-Vector128 dtype:
+Possible Vector128 dtype:
 d = np.dtype((np.float128, np.dtype({"names": list("xyzw"), "formats": [np.float32]*4})))
 a = np.array([0], dtype=d)
-
 a[0] = <float128 value>
 a['x'][0] = <float32 x coordinate>
 
@@ -22,6 +21,7 @@ a['x'][0] = <float32 x coordinate>
 
 from pyb3 import pybullet as p
 import os
+import random
 import re
 import sys
 import numpy as np
@@ -69,12 +69,21 @@ def unit(v): # {{{0
   return np.divide(v, np.linalg.norm(v))
 # 0}}}
 
-def V3(cx=0, cy=0, cz=0): # {{{0
-  return np.array((cx, cy, cz))
+def V3(x=0, y=0, z=0): # {{{0
+  "Create a 3-dimensional vector"
+  return np.array((x, y, z))
+# 0}}}
+
+def randomVec(low=-0.5, high=0.5): # {{{0
+  "Create a vector with each component having a random value"
+  return V3(
+    random.random() * (high - low) + low,
+    random.random() * (high - low) + low,
+    random.random() * (high - low) + low
+  )
 # 0}}}
 
 # Axes, coordinates, vectors, etc {{{0
-
 V3_111 = V3(1, 1, 1)
 V3_000 = V3(0, 0, 0)
 

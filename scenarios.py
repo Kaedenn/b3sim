@@ -9,8 +9,11 @@ import os
 import random
 import sys
 
+import pyb3
 from pyb3 import pybullet as p
 from utility import *
+
+logger = pyb3.getLogger()
 
 def _name(obj, name): # {{{0
   "Determine what name to use for obj"
@@ -138,7 +141,7 @@ class BoxedScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(BoxedScenario, self).setup(app)
-    a = app.getSlider("wallAlpha")
+    a = app.getSlider("Wall Opacity")
     wt = np.float(app.wallThickness())
     ws = np.float(app.worldSize())
     wcx = V3(wt, ws+wt, ws+wt)
@@ -165,7 +168,7 @@ class BrickTower1Scenario(ScenarioBase): # {{{0
   def setup(self, app):
     objs = super(BrickTower1Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
-    layers = int(round(app.getSlider("numBrickLayers")))
+    layers = int(round(app.getSlider("Brick Layers")))
     bw = app.brickWidth() * app.brickScale()
     bl = app.brickLength() * app.brickScale()
     bh = app.brickHeight() * app.brickScale()
@@ -198,7 +201,7 @@ class BrickTower2Scenario(ScenarioBase): # {{{0
   def setup(self, app):
     objs = super(BrickTower2Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
-    layers = int(round(app.getSlider("numBrickLayers")))
+    layers = int(round(app.getSlider("Brick Layers")))
     bw = app.brickWidth() * app.brickScale() / 2
     bl = app.brickLength() * app.brickScale() / 2
     bs = min(bw, bl)
@@ -230,7 +233,7 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
   def setup(self, app):
     objs = super(BrickTower3Scenario, self).setup(app)
     n = int(round(app.numObjects() ** 0.5))
-    layers = int(round(app.getSlider("numBrickLayers")))
+    layers = int(round(app.getSlider("Brick Layers")))
     bw = app.brickWidth() * app.brickScale()
     bl = app.brickLength() * app.brickScale()
     bh = app.brickHeight() * app.brickScale()
@@ -310,15 +313,15 @@ class BallpitScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(BallpitScenario, self).setup(app)
-    wmin, wmax = app.worldXMin(), app.worldXMax()
+    xmin, xmax = app.worldXMin(), app.worldXMax()
     ymin, ymax = app.worldYMin(), app.worldYMax()
     zmin, zmax = app.worldZMin(), app.worldZMax()
     mass = app.objectMass()
     rad = app.objectRadius()
     for i in range(app.numObjects()):
       spos = V3(
-        random.uniform(wmin, wmax),
-        random.uniform(wmin, wmax),
+        random.uniform(xmin, xmax),
+        random.uniform(ymin, ymax),
         random.uniform(zmin, zmax))
       objs.append(app.createSphere(mass, spos, rad, restitution=1))
     return self._applyTransforms(app, objs)
@@ -337,12 +340,38 @@ class BunnyScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(BunnyScenario, self).setup(app)
-    pos = app.worldFloor() + V3(z=self.get("bunnyZ", 5, float))
-    orn = p.getQuaternionFromEuler([math.pi/2, 0, 0])
-    scale = self.get("bunnySize", 2, float)
-    mass = self.get("bunnyMass", app.objectMass() * 10, float)
-    b = app.loadSoftBody("data/bunny.obj", pos=pos, orn=orn, scale=scale, mass=mass)
-    objs.append(b)
+    kwargs = {
+      "pos": app.worldFloor() + V3(z=self.get("bunnyZ", 5, float)),
+      "orn": p.getQuaternionFromEuler([math.pi/2, 0, 0]),
+      "scale": self.get("bunnySize", 2, float),
+      "mass": self.get("bunnyMass", app.objectMass() * 10, float),
+      "margin": 0.5
+    }
+    objs.append(app.loadSoftBody("data/bunny.obj", **kwargs))
     return self._applyTransforms(app, objs)
+# 0}}}
+
+class RandomUrdfScenario(ScenarioBase): # {{{0
+  """
+  Add a bunch of random objects to the world
+  """
+  def __init__(self, name=None, **kwargs):
+    super(RandomUrdfScenario, self).__init__(_name(self, name), **kwargs)
+
+  def setup(self, app):
+    objs = super(RandomUrdfScenario, self).setup(app)
+    size = 10 * self.get("urdfSize", 1, float)
+    xmin, xmax = app.worldXMin(), app.worldXMax()
+    ymin, ymax = app.worldYMin(), app.worldYMax()
+    zmin, zmax = app.worldZMin(), app.worldZMax()
+    for i in range(app.numObjects()):
+      spos = V3(
+        random.uniform(xmin, xmax),
+        random.uniform(ymin, ymax),
+        random.uniform(zmin, zmax))
+      f = pyb3.getRandomUrdf()
+      if f:
+        objs.append(app.loadURDF(f, basePosition=spos, globalScaling=size))
+    return objs
 # 0}}}
 

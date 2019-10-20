@@ -10,14 +10,12 @@ Recommended usage is one of the following:
   from pyb3 import pybullet as p
 """
 
-import os
-import sys
-
 # pybullet TODO: {{{0
-# Support "Button" and "ComboBox" debug inputs
-#   Requires extensive changes to pybullet and bullet examples API
-# Support callbacks for debug inputs (called on change)
-# Add the following functions/macros:
+# Add custom logging handler calling b3Print, b3Warning, b3Error
+# Implement --verbose in both the client and server (half done)
+# Support "Button" debug inputs (done)
+# Support "ComboBox" debug inputs
+# Add the following APIs:
 #   Bullet3Common/b3Matrix3x3.h (numpy can replace)
 #   Bullet3Common/b3MinMax.h (implement in pure Python)
 #   Bullet3Common/b3Quaternion.h (numpy can replace)
@@ -29,11 +27,9 @@ import sys
 #   LinearMath/btConvexHull.h
 #   LinearMath/btGeometryUtil.h
 #   LinearMath/btMatrixX.h (numpy can replace)
-#   getCameraPosition
-#   b3Print (done)
-#   b3Warning
-#   b3Error
-#   PhysicsServerExample.cpp
+#   b3Print (doesn't log to example browser)
+#   b3Warning (doesn't log to example browser)
+#   b3Error (doesn't log to example browser)
 #   b3ReferenceFrameHelper.hpp
 #     getPointWorldToLocal
 #     getPointLocalToWorld
@@ -45,12 +41,12 @@ import sys
 #   Provide simpler API for keyboard camera movement?
 #   Remove all built-in keybinds?
 #     ../examples/SharedMemory/PhysicsServerExample.cpp
-# Separate physics simulation from user input?
-#   This requires a main loop in the host program
-# Support adding/changing keybinds in PhysicsServerExample?
+#   Support adding/changing keybinds in PhysicsServerExample?
 # 0}}}
 
 # pybullet documentation (information discovered so far): {{{0
+#
+###############################################################################
 #
 # pybullet.GUI:
 #   calls InProcessPhysicsClientSharedMemory(argc, argv, true)
@@ -60,6 +56,8 @@ import sys
 #     calls btCreateInProcessExampleBrowser
 #     defined in examples/ExampleBrowser/InProcessExampleBrowser.cpp
 #       constructs btInProcessExampleBrowserInternalData
+#     dispatches B3_THREAD_SCHEDULE_TASK
+#       ../examples/MultiThreading/b3PosixThreadSupport.cpp
 #
 #   then calls PhysicsClientSharedMemory::connect()
 #     allocates shared memory
@@ -74,9 +72,13 @@ import sys
 #
 # PhysicsServerExample is constructed in
 #   examples/SharedMemory/PhysicsServerExample.cpp
+# Uses btSoftBodyDynamicsWorld
 #
 # Commands are handled in
 #   examples/SharedMemory/PhysicsServerCommandProcessor.cpp
+#
+# Keybinds are handled in
+#   examples/ExampleBrowser/OpenGLExampleBrowser.cpp
 #
 ###############################################################################
 #
@@ -86,24 +88,60 @@ import sys
 #
 # 0}}}
 
-__all__ = ["pybullet", "libc"]
-
 import ctypes
+import logging
+import os
+import random
+import sys
 import pybullet
 pybullet._PYB3_POLYFILL = True
 
+# Grab pybullet_data
+try:
+  import pybullet_data
+  HAS_PYB3_DATA = True
+except ImportError as e:
+  HAS_PYB3_DATA = False
+
+# Grab pybullet_envs
+try:
+  import pybullet_envs
+  HAS_PYB3_ENVS = True
+except ImportError as e:
+  HAS_PYB3_ENVS = False
+
+# Grab pybullet_utils
+try:
+  import pybullet_utils
+  HAS_PYB3_UTILS = True
+except ImportError as e:
+  HAS_PYB3_UTILS = False
+
+# Import cffi.FFI
 try:
   from cffi import FFI
   HAVE_FFI = True
 except ImportError:
   HAVE_FFI = False
 
+# Global logger
+LOGGING_FORMAT = "%(filename)s:%(lineno)s:%(levelname)s: %(message)s"
+logging.basicConfig(format=LOGGING_FORMAT, level=logging.INFO)
+_logger = None
+def getLogger(*args, **kwargs):
+  "Get the global logger"
+  global _logger
+  if _logger is None:
+    _logger = logging.getLogger("simulation")
+  return _logger
+
+# Provide convenience access to libc
 try:
   libc = ctypes.cdll.LoadLibrary("libc.so.6")
 except OSError:
   libc = ctypes.cdll.msvcrt
 
-# Ensure pybullet has expected properties
+# Ensure pybullet has expected properties {{{0
 def _ensurePybulletProperty(name, val):
   "Ensure pybullet has the given attribute with the given value"
   if not hasattr(pybullet, name):
@@ -143,23 +181,36 @@ _ensurePybulletProperty("B3G_KP_6", pybullet.B3G_KP_RIGHT)
 _ensurePybulletProperty("B3G_KP_7", pybullet.B3G_KP_HOME)
 _ensurePybulletProperty("B3G_KP_8", pybullet.B3G_KP_UP)
 _ensurePybulletProperty("B3G_KP_9", pybullet.B3G_KP_PGUP)
+
 del _ensurePybulletProperty
 
 # b3Print
 if not hasattr(pybullet, "b3Print"):
-  def b3Print(msg, eol="\n"):
+  def b3Print(msg):
     "Polyfilled b3Print function implemented in pure Python"
     sys.stdout.write(msg)
-    if eol:
-      sys.stdout.write(eol)
+    sys.stdout.write("\n")
   pybullet.b3Print = b3Print
+
+# b3Warning
+if not hasattr(pybullet, "b3Warning"):
+  def b3Warning(msg):
+    sys.stderr.write("Warning:")
+    sys.stderr.write(msg)
+    sys.stdout.write("\n")
+  pybullet.b3Warning = b3Warning
+
+# b3Error
+if not hasattr(pybullet, "b3Error"):
+  def b3Error(msg):
+    sys.stderr.write("Error:")
+    sys.stderr.write(msg)
+    sys.stdout.write("\n")
+  pybullet.b3Error = b3Error
 
 # NotConnectedError
 if not hasattr(pybullet, "NotConnectedError"):
-  class NotConnectedError(pybullet.error):
-    "Polyfilled NotConnectedError"
-    pass
-  pybullet.NotConnectedError = NotConnectedError
+  pybullet.NotConnectedError = pybullet.error
 
 # addUserDebugButton
 if not hasattr(pybullet, "addUserDebugButton"):
@@ -174,6 +225,27 @@ if not hasattr(pybullet, "readUserDebugButton"):
     "Stub function for an unimplemented feature"
     raise NotImplementedError()
   pybullet.readUserDebugButton = readUserDebugButton
+
+# resetUserDebugButton
+if not hasattr(pybullet, "resetUserDebugButton"):
+  def resetUserDebugButton(*args, **kwargs):
+    "Stub function for an unimplemented feature"
+    raise NotImplementedError
+  pybullet.resetUserDebugButton = resetUserDebugButton
+# 0}}}
+
+def getRandomUrdf(): # {{{0
+  "Return the path to a random URDF file, if pybullet_data is available"
+  if HAS_PYB3_DATA:
+    path = os.path.join(pybullet_data.getDataPath(), "random_urdfs")
+    if os.path.exists(path):
+      nr = random.choice([x for x in os.listdir(path) if x.isdigit()])
+      return os.path.join(path, nr, nr + ".urdf")
+    else:
+      pybullet.b3Error("Path does not exist: {!r}".format(path))
+  else:
+    pybullet.b3Error("pybullet_data not available")
+# 0}}}
 
 # vim: set ts=2 sts=2 sw=2 et:
 
