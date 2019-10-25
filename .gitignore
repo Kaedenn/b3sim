@@ -1,13 +1,20 @@
 
+# Compiled or generated files and directories
 *.pyc
 *.pyo
-.*.swp
-.*.swo
-old/
 *.a
 *.o
 *.so
+__pycache__/
+
+# Temp files
+.*.swp
+.*.swo
 
 # FFI modules
 ffi/*.c
 ffi/*.o
+
+# Holding directories
+renders/
+old/

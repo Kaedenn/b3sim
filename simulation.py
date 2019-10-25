@@ -21,10 +21,10 @@ import numpy as np
 import pyb3
 from pyb3 import pybullet as p
 from bulletbase import *
-from utility import *
 from keypressmgr import *
-from symbols import *
 from scenarios import *
+from symbols import *
+from utility import *
 
 logger = pyb3.getLogger()
 
@@ -48,12 +48,12 @@ F       Fire several small projectiles towards the target
 F12     Start/end rendering to mp4 file
 
 Camera movement:
-Up      Increase pitch
-Down    Decrease pitch
+Up      Increase pitch: angle camera to point down
+Down    Decrease pitch: angle camera to point up
 Left    Decrease yaw: rotate scene to the right
 Right   Increase yaw: rotate scene to the left
-Alt+Up  Decrease distance to target (shift to move 10x)
-Alt+Dn  Increase distance to target (shift to move 10x)
+C-Up    Decrease distance to target (shift to move 10x)
+C-Down  Increase distance to target (shift to move 10x)
 Num-8   Move target position north (towards positive y) (shift to move 10x)
 Num-2   Move target position south (towards negative y) (shift to move 10x)
 Num-6   Move target position east (towards positive x) (shift to move 10x)
@@ -89,10 +89,10 @@ C-<k>   Both <k> and Ctrl pressed
 # 0}}}
 
 # Starting camera position and orientation (degrees) {{{0
+CAM_START_TARGET = V3(0, 0, 0)
 CAM_START_PITCH = 340
 CAM_START_YAW = 0
 CAM_START_DIST = 25
-CAM_START_TARGET = V3(0, 0, 0)
 # 0}}}
 
 # Default key step amounts {{{0
