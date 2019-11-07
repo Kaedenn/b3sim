@@ -20,9 +20,13 @@ a['x'][0] = <float32 x coordinate>
 """
 
 from pyb3 import pybullet as p
+import argparse
+import errno
+import math
 import os
 import random
 import re
+import subprocess
 import sys
 import numpy as np
 import time
@@ -32,7 +36,23 @@ try:
 except ImportError:
   from time import monotonic
 
-# Color constants and functions {{{0
+# Custom argparse help formatter {{{0
+class ArgumentDefaultsHelpFormatter(argparse.HelpFormatter):
+  """Help message formatter which adds default values to argument help.
+  This formatter acts like the standard ArgumentDefaultsHelpFormatter except
+  for omitting default values of True, False, or None.
+  """
+  def _get_help_string(self, action):
+    help = action.help
+    if '%(default)' not in action.help:
+      if action.default not in (argparse.SUPPRESS, True, False, None):
+        defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
+        if action.option_strings or action.nargs in defaulting_nargs:
+          help += ' (default: %(default)s)'
+    return help
+# 0}}}
+
+# Color constants {{{0
 # Primary and secondary colors
 C3_RED = [1, 0, 0]
 C3_GRN = [0, 1, 0]
@@ -58,8 +78,62 @@ C4_MAG = [1, 0, 1, 1]
 C4_BLK = [0, 0, 0, 1]
 C4_WHT = [1, 1, 1, 1]
 C_NONE = [0, 0, 0, 0]
+# 0}}}
 
-def withAlpha(c, a):
+def parseColor(c, cmax=256, scale=1, forceAlpha=None): # {{{0
+  """Parse a color c between 0 and cmax.
+  Understood formats:
+    "#rrggbb"
+    "#rrggbbaa"
+    "rr,gg,bb"
+    "rr,gg,bb,aa"
+    (r, g, b) or [r, g, b]
+    (r, g, b, a) or [r, g, b, a]
+  If forceAlpha is not None, then alpha component is ignored and the value for
+  forceAlpha is used instead.
+  Return value is a 4-tuple of floats between 0 and scale.
+  """
+  r = g = b = a = float(cmax)
+  if isinstance(c, basestring):
+    if c[0] == '#' and len(c) in (7, 9):
+      r = int(c[1:3], 16)
+      g = int(c[3:5], 16)
+      b = int(c[5:7], 16)
+      if len(c) == 9:
+        a = int(c[7:9], 16)
+    elif c.count(",") in (2, 3):
+      parts = map(float, c.split(","))
+      r = parts[0]
+      g = parts[1]
+      b = parts[2]
+      if len(parts) == 4:
+        a = parts[3]
+    else:
+      # Invalid format; return None
+      return None
+  else:
+    try:
+      if len(c) in (3, 4):
+        r, g, b = c[0], c[1], c[2]
+        if len(c) == 4:
+          a = c[3]
+    except TypeError as e:
+      # Unexpected type; return None
+      return None
+  if any(x is None for x in (r, g, b, a)):
+    # Failed parsing; return None
+    return None
+  cr = float(r) / cmax * scale
+  cg = float(g) / cmax * scale
+  cb = float(b) / cmax * scale
+  if forceAlpha is not None:
+    ca = float(forceAlpha)
+  else:
+    ca = float(a) / cmax * scale
+  return cr, cg, cb, ca
+# 0}}}
+
+def withAlpha(c, a): # {{{0
   "Apply alpha value to the color"
   return [c[0], c[1], c[2], a]
 # 0}}}
@@ -84,15 +158,17 @@ def randomVec(low=-0.5, high=0.5): # {{{0
 # 0}}}
 
 # Axes, coordinates, vectors, etc {{{0
-V3_111 = V3(1, 1, 1)
-V3_000 = V3(0, 0, 0)
 
-# Axis vectors
-AXIS_X = V3(1, 0, 0)
-AXIS_Y = V3(0, 1, 0)
-AXIS_Z = V3(0, 0, 1)
+# Basis vectors and their combinations
+V3_X = V3(1, 0, 0)
+V3_Y = V3(0, 1, 0)
+V3_Z = V3(0, 0, 1)
+V3_XY = V3(1, 1, 0)
+V3_XZ = V3(1, 0, 1)
+V3_YZ = V3(0, 1, 1)
+V3_XYZ = V3(1, 1, 1)
 
-# Axis names
+# Camera axis names
 CAM_AXIS_PITCH = "pitch"
 CAM_AXIS_YAW = "yaw"
 CAM_AXIS_DIST = "distance"
@@ -101,7 +177,7 @@ CAM_AXIS_X = "x"
 CAM_AXIS_Y = "y"
 CAM_AXIS_Z = "z"
 
-# Cardinal direction names
+# Camera cardinal direction names
 CAM_UP = "+" + CAM_AXIS_Z
 CAM_DOWN = "-" + CAM_AXIS_Z
 CAM_NORTH = "-" + CAM_AXIS_Y
@@ -109,12 +185,14 @@ CAM_SOUTH = "+" + CAM_AXIS_Y
 CAM_EAST = "+" + CAM_AXIS_X
 CAM_WEST = "-" + CAM_AXIS_X
 
-# Cardinal direction names to axis vectors
+# Map cardinal direction names to axis vectors
 CAM_AXES = {
-  CAM_NORTH: -AXIS_Y,
-  CAM_SOUTH: +AXIS_Y,
-  CAM_EAST: +AXIS_X,
-  CAM_WEST: -AXIS_X
+  CAM_NORTH: -V3_Y,
+  CAM_SOUTH: +V3_Y,
+  CAM_EAST: +V3_X,
+  CAM_WEST: -V3_X,
+  CAM_UP: +V3_Z,
+  CAM_DOWN: -V3_Z
 }
 
 # Colors for each axis
@@ -129,9 +207,9 @@ CAM_AXIS_COLORS = {
 
 # Cam axis names to axis vectors
 CAM_AXIS_VECTORS = {
-  CAM_AXIS_X: AXIS_X,
-  CAM_AXIS_Y: AXIS_Y,
-  CAM_AXIS_Z: AXIS_Z
+  CAM_AXIS_X: V3_X,
+  CAM_AXIS_Y: V3_Y,
+  CAM_AXIS_Z: V3_Z
 }
 # 0}}}
 
@@ -213,6 +291,47 @@ def getRemove(d, key, dflt=None, typeObj=None): # {{{0
 def formatVec(v): # {{{0
   "Format a 3-vector or 4-vector as a string"
   return "({})".format(", ".join("{:10.2f}".format(i) for i in v))
+# 0}}}
+
+def openFileDialog(title=None, globs=(), multiple=False): # {{{0
+  "Create an open-file dialog using zenity"
+  args = ["zenity", "--file-selection"]
+  if title is not None:
+    args.append("--title={}".format(title))
+  if globs:
+    args.append("--file-filter={}".format(" ".join(globs)))
+  if multiple:
+    args.append("--multiple")
+  args.append("--separator=:")
+  try:
+    return subprocess.check_output(args).rstrip("\r\n").split(":")
+  except subprocess.CalledProcessError as e:
+    if e.returncode == 1:
+      # No files selected
+      return ()
+    raise
+  except OSError as e:
+    if e.errno == errno.ENOENT:
+      # Not having zenity is a warning
+      sys.stderr.write("Failed invoking {!r}; is zenity installed?\n".format(args))
+      return ()
+    raise
+# 0}}}
+
+def centerString(s, width=80, ch=" ", padSpace=False): # {{{0
+  """Center a string using ch.
+  s         The string to center
+  width     The desired with of the resulting string (default: 80)
+  ch        The padding character (default: space)
+  padSpace  If True, add a space before and after s
+  """
+  if padSpace:
+    s = " " + s + " "
+  padSize = (width - len(s)) / len(ch) / 2
+  val = (ch * padSize) + s + (ch * padSize)
+  if len(val) < width:
+    val += ch * ((width - len(val)) / len(ch))
+  return val
 # 0}}}
 
 # vim: set ts=2 sts=2 sw=2 et:

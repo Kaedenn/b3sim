@@ -12,6 +12,7 @@ from __future__ import print_function
 
 import argparse
 import datetime
+import glob
 import logging
 import random
 import sys
@@ -28,6 +29,26 @@ from utility import *
 
 logger = pyb3.getLogger()
 
+# Time step (seconds) between subsequent config/input handling events
+INPUT_SLEEP = 0.05
+
+# Starting camera position and orientation (degrees) {{{0
+CAM_START_TARGET = V3(0, 0, -80)
+CAM_START_PITCH = 340
+CAM_START_YAW = 0
+CAM_START_DIST = 100
+# 0}}}
+
+# Default key step amounts {{{0
+KEY_STEP_DIST = 0.25
+KEY_STEP_PITCH = 5.0
+KEY_STEP_YAW = 5.0
+KEY_STEP_X = 0.5
+KEY_STEP_Y = 0.5
+KEY_STEP_Z = 0.5
+KEY_FAST_MULT = 10.0
+# 0}}}
+
 # Keybind help text {{{0
 # Unused:
 #   e n q r t u x y z 1 2 3 4 5 6 7 8 9 0 , ; ' [ ] - =
@@ -36,17 +57,72 @@ logger = pyb3.getLogger()
 # Unusable:
 #   Bksp  Maps to B3G_F9
 #   Tab   Maps to B3G_F10
-KEYBIND_HELP_TEXT = r"""Available keybinds:
-h       Display keybind help (this list)
-b       Print entire body list
+KEYBIND_HELP_TEXT = r"""
+Available keybinds:
+h       Print the keybind help text (this list)
+b       Print information on every body in the simulation
 f       Fire a projectile towards the target
-F       Fire several small projectiles towards the target
-?       Print camera and target information
+F       Fire several projectiles towards the target
+?       Print camera position and orientation information 
 `       Toggle built-in keyboard shortcuts
-\       Pause or resume simulation
-.       Advance simulation by one timestep
-F12     Start/end rendering to mp4 file
+\       Pause or un-pause the simulation
+.       Advance simulation by one client timestep
+F12     Start/end rendering to an mp4 file (see below)
+C-o     Present an open-file dialog for loading URDF files
+C-e     If debugging is enabled, inject an error into the client
 
+Built-in keybinds (X = may not work):
+Esc     Close simulation
+F1      Start/end rendering frames to PNGs
+a       Toggle AABB (during wireframe)
+c       Toggle drawing of contact points
+d       Toggle deactivation
+g       Toggle rendering of the grid and GUI
+i   X   Pause simulation
+j       Toggle frame counter drawing (requires custom Bullet)
+k       Toggle drawing of constraints
+l       Toggle drawing of constraint limits
+m       Toggle mouse picking
+o   X   Single-step simulation
+p       Begin/end logging of timings (to {timings_path})
+s       Toggle shadow map (object shading)
+v       Toggle rendering visual geometry
+w       Toggle wireframe drawing
+
+Key modifiers:
+S-<k>   Both <k> and Shift pressed
+M-<k>   Both <k> and Alt pressed
+C-<k>   Both <k> and Ctrl pressed
+^<k>    Identical to C-<k>
+
+Client timesteps may be a multiple of the server simulation rate; the server
+attempts to perform simulation calculations on the order of hundreds per
+second while the client only renders at 30 or 60 frames per second. This may
+result in the "advance simulation by one client timestep" key advancing the
+simulation by multiple frames.
+
+This difference also affects exporting to mp4.
+
+The mp4 file will have the following format: pyb3-YYYYMMDDHHMISS.mp4
+  YYYY: Current year
+  MM: Current month number
+  DD: Current day-of-month
+  HH: Current hour, in 24-hour format
+  MI: Current minute
+  SS: Current second
+and will be saved to the current directory, presently {cwd}.
+
+Inputs are handled every {df} seconds ({fps} times per second). This includes
+keys, camera movement, GUI slider configuration, and GUI buttons.
+
+""".format(timings_path="/tmp/timings",
+           cwd=os.getcwd(),
+           df=INPUT_SLEEP,
+           fps=1/INPUT_SLEEP)
+# 0}}}
+
+# Camera movement help text {{{0
+CAMERA_HELP_TEXT = """
 Camera movement:
 Up      Increase pitch: angle camera to point down
 Down    Decrease pitch: angle camera to point up
@@ -61,51 +137,41 @@ Num-4   Move target position west (towards negative x) (shift to move 10x)
 Num-9   Move target position up (towards positive z) (shift to move 10x)
 Num-7   Move target position down (towards negative z) (shift to move 10x)
 Num-5   Reset target position to the center of the world floor
+S-Num-5 Reset camera to the default position and orientation
 
-Built-in keybinds (X = may not work):
-Escape  Close simulation
-F1      Start/end rendering frames to PNGs
-a       Toggle AABB (during wireframe)
-c   X   Toggle drawing of contact points
-d       Toggle deactivation
-g       Toggle rendering of the grid and GUI
-i   X   Pause simulation
-j   X   Toggle drawing of framerate
-k   X   Toggle drawing of constraints
-l   X   Toggle drawing of constraint limits
-m       Toggle mouse picking
-o   X   Single-step simulation
-p       Begin/end logging of timings (to {timings_path})
-s       Toggle shadow map (object shading)
-v       Toggle rendering visual geometry
-w       Toggle wireframe drawing
+Camera starting position and orientation:
+  target x: {}
+  target y: {}
+  target z: {}
+  pitch: {} degrees
+  yaw: {} degrees
+  distance: {} units
 
-Key modifiers:
-S-<k>   Both <k> and Shift pressed
-M-<k>   Both <k> and Alt pressed
-C-<k>   Both <k> and Ctrl pressed
-^<k>    Identical to C-<k>
-""".format(timings_path="/tmp/timings")
+Camera movement rates in units per frame:
+  target x: {} ({} if holding shift)
+  target y: {} ({} if holding shift)
+  target z: {} ({} if holding shift)
+  pitch: {} degrees
+  yaw: {} degrees
+  distance: {} ({} if holding shift)
+""".format(
+    CAM_START_TARGET[0],
+    CAM_START_TARGET[1],
+    CAM_START_TARGET[2],
+    CAM_START_PITCH,
+    CAM_START_YAW,
+    CAM_START_DIST,
+    KEY_STEP_X,
+    KEY_STEP_X * KEY_FAST_MULT,
+    KEY_STEP_Y,
+    KEY_STEP_Y * KEY_FAST_MULT,
+    KEY_STEP_Z,
+    KEY_STEP_Z * KEY_FAST_MULT,
+    KEY_STEP_PITCH,
+    KEY_STEP_YAW,
+    KEY_STEP_DIST,
+    KEY_STEP_DIST * KEY_FAST_MULT)
 # 0}}}
-
-# Starting camera position and orientation (degrees) {{{0
-CAM_START_TARGET = V3(0, 0, 0)
-CAM_START_PITCH = 340
-CAM_START_YAW = 0
-CAM_START_DIST = 25
-# 0}}}
-
-# Default key step amounts {{{0
-KEY_STEP_DIST = 0.25
-KEY_STEP_PITCH = 5
-KEY_STEP_YAW = 5
-KEY_STEP_X = 0.5
-KEY_STEP_Y = 0.5
-KEY_STEP_Z = 0.5
-# 0}}}
-
-# Time step (seconds) between subsequent config/input handling events
-INPUT_SLEEP = 0.05
 
 class Simulation(BulletAppBase):
   """
@@ -119,19 +185,18 @@ class Simulation(BulletAppBase):
 
     Extra keyword arguments: (see BulletAppBase.__init__ for more)
       connectArgs     extra args to pass to pybullet.connect()
-      worldSize       world scale (10)
-      worldSizeMax    maximum world scale (100)
-      objectRadius    radius for each object (0.05)
-      objectMass      mass for each object (0.05)
-      wallThickness   thickness of bounding-box walls (0.1)
-      numBricks       override (approximate) number of bricks (numObjects)
-      brickWidth      width of each brick (0.5)
-      brickLength     length of each brick (0.1)
-      brickHeight     height of each brick (0.15)
-      brickDist       distance between bricks (0.5)
-      brickScale      brick scale factor (2)
+      worldSize       world scale (100)
+      worldSizeMax    maximum world scale (1000)
+      objectRadius    radius for each object (0.5)
+      objectMass      mass for each object (5)
+      wallThickness   thickness of bounding-box walls (1.0)
+      brickWidth      width of each brick (5.0)
+      brickLength     length of each brick (1.0)
+      brickHeight     height of each brick (1.5)
+      brickDist       distance between bricks (5.0)
+      brickScale      brick scale factor (1.0)
       numBrickLayers  height of brick tower, in number of bricks (20)
-      wallAlpha       default transparency of the box walls (0.1)
+      wallAlpha       default transparency of the box walls (0.1 or 10%)
 
     Extra keyword arguments for populating objects:
       walls           add walls (False)
@@ -148,51 +213,41 @@ class Simulation(BulletAppBase):
       rand            (various) adjust body velocities by +/- 1% (False)
       projShape       ("projectile") 1, 2, 3 for SPHERE, BOX, CAPSULE (1)
       projSize        ("projectile") projectile size (objectRadius/2)
-      projSpeed       ("projectile") speed of the projectiles (20)
+      projSpeed       ("projectile") speed of the projectiles (100)
       bunnyZ          ("bunny") height of the bunny off the floor (5)
       bunnySize       ("bunny") size mult of the bunny (2)
       bunnyMass       ("bunny") mass of the bunny (objectMass * 10)
-
-    Note: the following constraints should hold to avoid the simulation locking
-    up trying to calculate object motions. "<<" means "much less than".
-      0 < numObjects
-      0 < numBricks
-      0 < objectRadius < worldSize
-      0 < brickWidth <= brickDist
-      0 < brickLength <= brickDist
-      0 < brickHeight <= brickDist
-      0 < brickScale
-      worldSize << worldSizeMax
+      urdfSize        ("urdfs") body size coefficient (5)
     """
     super(Simulation, self).__init__(
         createBodyKwargs={"useMaximalCoordinates": True},
         *args, **kwargs)
     self._n = numObjects
-    self._ws = self.getArg("worldSize", 10, int)
-    self._wsmax = self.getArg("worldSizeMax", 100, int)
-    self._or = self.getArg("objectRadius", 0.05, float)
-    self._om = self.getArg("objectMass", 0.05, float)
-    self._wt = self.getArg("wallThickness", 0.1, float)
-    # Brick size information
-    self._bw = self.getArg("brickWidth", 0.5, float)
-    self._bl = self.getArg("brickLength", 0.1, float)
-    self._bh = self.getArg("brickHeight", 0.15, float)
-    self._bd = self.getArg("brickDist", 0.5, float)
-    self._bs = self.getArg("brickScale", 2, float)
-    # Allow using a pre-existing server
+    self._ws = self.getArg("worldSize", 100, int)
+    self._wsmax = self.getArg("worldSizeMax", 1000, int)
+    self._or = self.getArg("objectRadius", 0.5, float)
+    self._om = self.getArg("objectMass", 5, float)
+    self._wt = self.getArg("wallThickness", 1.0, float)
+    self._bw = self.getArg("brickWidth", 5.0, float)
+    self._bl = self.getArg("brickLength", 1.0, float)
+    self._bh = self.getArg("brickHeight", 1.5, float)
+    self._bd = self.getArg("brickDist", 5.0, float)
+    self._bs = self.getArg("brickScale", 1.0, float)
     if not self.isConnected():
       self.connect()
     # Create parameters available in the GUI
-    self.addSlider("Brick Layers", 1, 100,
-        self.getArg("numBrickLayers", 20, int))
-    self.addSlider("Wall Opacity", 0, 1,
-        self.getArg("wallAlpha", 0.1, float))
-    # Projectile values (for interactive projectiles, "f" key)
-    self.addSlider("Projectile Size", 0.1, 5, 0.25)
-    self.addSlider("Projectile Mass", 0.1, 10, 1)
-    self.addSlider("Projectile Speed", 1, 100, 10)
-    # Button for adding random URDFs
-    self.addButton("Add Random URDF")
+    self.addSlider("Brick Layers", 1, 100, self.getArg("numBrickLayers", 20, int))
+    self.addSlider("Wall Opacity", 0, 1, self.getArg("wallAlpha", 0.1, float))
+    # Projectile configuration (used by self.fireProjectile)
+    self.addSlider("Projectile Size", 1.0, 50.0, 2.5)
+    self.addSlider("Projectile Mass", 5, 50, 25)
+    self.addSlider("Projectile Speed", 100, 1000, 100)
+    # Inputs for adding URDFs
+    self.addSlider("URDF Size", 1, 100, 20)
+    self.addButtonEvent("Add Random URDF", self.addRandomUrdf)
+    self.addButtonEvent("Load URDF", self.loadUrdf)
+    # Input for removing most recently added object
+    self.addButtonEvent("Remove Last Body", self.removeLastBody)
   # 0}}}
 
   def numObjects(self): # {{{0
@@ -330,6 +385,7 @@ class Simulation(BulletAppBase):
     wantBunny = self.getArg("bunny")
     wantUrdfs = self.getArg("urdfs")
     wantRand = self.getArg("rand")
+    wantRope = self.getArg("rope")
     if wantWalls:
       scs.append(BoxedScenario())
     if wantPit:
@@ -352,12 +408,14 @@ class Simulation(BulletAppBase):
       scs.append(ProjectileScenario(rand=wantRand, **kws))
     if wantBunny:
       kws = {}
-      kws["bunnyZ"] = self.getArg("bunnyZ", 5, float)
-      kws["bunnySize"] = self.getArg("bunnySize", 2, float)
+      kws["bunnyZ"] = self.getArg("bunnyZ", 20, float)
+      kws["bunnySize"] = self.getArg("bunnySize", 10, float)
       kws["bunnyMass"] = self.getArg("bunnyMass", self.objectMass() * 10, float)
       scs.append(BunnyScenario(**kws))
     if wantUrdfs:
       scs.append(RandomUrdfScenario())
+    if wantRope:
+      scs.append(RopeScenario())
 
     # Add all of the objects from all of the scenarios configured
     for sc in scs:
@@ -417,18 +475,33 @@ class Simulation(BulletAppBase):
     return s
   # 0}}}
 
+  def addRandomUrdf(self): # {{{0
+    "Add a random URDF to the simulation"
+    f = pyb3.getRandomUrdf()
+    if f:
+      scale = self.getSlider("URDF Size")
+      logger.debug("Adding random URDF: {} (scale {})".format(f, scale))
+      self.loadURDF(f, basePosition=randomVec(), globalScaling=scale)
+    else:
+      logger.error("Failed to add random URDF")
+  # 0}}}
+
+  def loadUrdf(self): # {{{0
+    "Present an open-file dialog for loading a URDF object"
+    objs = openFileDialog(title="Select object file(s)...",
+                          globs=("URDF (*.urdf)|*.urdf",),
+                          multiple=True)
+    logger.debug("Loading objects: {!r}".format(objs))
+    scale = self.getSlider("URDF Size")
+    for obj in objs:
+      pos = randomVec()
+      logger.debug("Loading URDF {} at {} with scale {}".format(obj, pos, scale))
+      self.loadURDF(obj, basePosition=pos, globalScaling=scale)
+  # 0}}}
+
   def tick(self): # {{{0
     "Check/apply passive/continuous configuration values"
-    self.updateGravity()
-    v = self.getButton("Add Random URDF")
-    if v:
-      f = pyb3.getRandomUrdf()
-      if f:
-        logger.debug("Adding random URDF: {}".format(f))
-        self.loadURDF(f, basePosition=randomVec(), globalScaling=5)
-        self.resetButton("Add Random URDF")
-      else:
-        logger.error("Failed to add random URDF")
+    super(Simulation, self).tick()
   # 0}}}
 
   def reset(self): # {{{0
@@ -461,60 +534,65 @@ def onMovementKey(app, keys): # {{{0
       return 1
     return 0 # 1}}}
   # Rules that define what keys do what
-  MOVEMENTS = { # {{{1
+  movementRules = { # {{{1
     CAM_AXIS_PITCH: {
-      "enable": anyPressed(keys, p.B3G_UP_ARROW, p.B3G_DOWN_ARROW) \
-          and not isPressed(keys, p.B3G_ALT) \
+      "enable": anyPressed(keys, "C-Up", "C-Down") \
           and isPressed(keys, p.B3G_CONTROL),
-      "step": app.getArg("cdp"),
-      "dir": getDir(p.B3G_UP_ARROW, p.B3G_DOWN_ARROW),
-      "fast": False
+      "stepArgName": "cdp",
+      "dir": ("Up", "Down"),
+      "enableFast": False
     },
     CAM_AXIS_YAW: {
-      "enable": anyPressed(keys, p.B3G_LEFT_ARROW, p.B3G_RIGHT_ARROW) \
-          and not isPressed(keys, p.B3G_ALT),
-      "step": app.getArg("cdy"),
-      "dir": getDir(p.B3G_LEFT_ARROW, p.B3G_RIGHT_ARROW),
+      "enable": anyPressed(keys, "Left", "Right"),
+      "stepArgName": "cdy",
+      "dir": ("Left", "Right"),
+      "enableFast": False
     },
     CAM_AXIS_DIST: {
-      "enable": not isPressed(keys, p.B3G_CONTROL) \
-          and anyPressed(keys, p.B3G_UP_ARROW, p.B3G_DOWN_ARROW) \
-          and not isPressed(keys, p.B3G_ALT),
-      "step": app.getArg("cdd"),
-      "dir": getDir(p.B3G_UP_ARROW, p.B3G_DOWN_ARROW),
-      "fast": isPressed(keys, p.B3G_SHIFT)
+      "enable": anyPressed(keys, "Up", "Down") \
+          and not isPressed(keys, p.B3G_CONTROL),
+      "stepArgName": "cdd",
+      "dir": ("Up", "Down"),
+      "enableFast": True
     },
     CAM_AXIS_X: {
-      "enable": anyPressed(keys, p.B3G_KP_4, p.B3G_KP_6),
-      "step": app.getArg("cdtx"),
-      "dir": getDir(p.B3G_KP_4, p.B3G_KP_6),
-      "fast": isPressed(keys, p.B3G_SHIFT)
+      "enable": anyPressed(keys, "k4", "k6"),
+      "stepArgName": "cdtx",
+      "dir": ("k4", "k6"),
+      "enableFast": True
     },
     CAM_AXIS_Y: {
-      "enable": anyPressed(keys, p.B3G_KP_2, p.B3G_KP_8),
-      "step": app.getArg("cdty"),
-      "dir": getDir(p.B3G_KP_2, p.B3G_KP_8),
-      "fast": isPressed(keys, p.B3G_SHIFT)
+      "enable": anyPressed(keys, "k2", "k8"),
+      "stepArgName": "cdty",
+      "dir": ("k2", "k8"),
+      "enableFast": True
     },
     CAM_AXIS_Z: {
-      "enable": anyPressed(keys, p.B3G_KP_7, p.B3G_KP_9),
-      "step": app.getArg("cdtz"),
-      "dir": getDir(p.B3G_KP_7, p.B3G_KP_9),
-      "fast": isPressed(keys, p.B3G_SHIFT)
+      "enable": anyPressed(keys, "k7", "k9"),
+      "stepArgName": "cdtz",
+      "dir": ("k7", "k9"),
+      "enableFast": True
     },
   } # 1}}}
   # Calculate desired movement
   movement = {}
-  for axis, rules in MOVEMENTS.items():
+  for axis, rules in movementRules.items():
     if rules["enable"]:
-      dv = rules["step"] * rules["dir"]
-      if rules.get("fast"):
-        dv *= 10
-      movement[axis] = movement.get(axis, 0) + dv
+      dv = app.getArg(rules["stepArgName"]) * getDir(*rules["dir"])
+      if rules.get("enableFast") and isPressed(keys, p.B3G_SHIFT):
+        dv *= KEY_FAST_MULT
+      movement[axis] = dv
   app.moveCamera(**movement)
-  # NUMPAD_5 resets the camera target to the world origin (z=floor)
   if isPressed(keys, p.B3G_KP_5):
-    app.setTargetPos(app.worldFloor())
+    if isPressed(keys, p.B3G_SHIFT):
+      # S-NUMPAD_5 resets the camera to the starting position and orientation
+      app.setTargetPos(CAM_START_TARGET)
+      app.setPitch(CAM_START_PITCH)
+      app.setYaw(CAM_START_YAW)
+      app.setTargetDistance(CAM_START_DIST)
+    else:
+      # NUMPAD_5 resets the camera target to the world origin (z=floor)
+      app.setTargetPos(app.worldFloor())
 # 0}}}
 
 ### Driver: argument parsing, initialization, keybinds ###
@@ -537,7 +615,6 @@ class SimulationDriver(object):
 
     self.kbm = self._setupKeyBinds()
 
-
     if not args.noloop:
       self._loop()
   # 0}}}
@@ -553,12 +630,9 @@ class SimulationDriver(object):
     if self.args.bgb is not None:
       cb = self.args.bgb
     if self.args.bg:
-      if self.args.bg[0] == '#' and len(self.args.bg) == 7:
-        cr = int(self.args.bg[1:3], 16)
-        cg = int(self.args.bg[3:5], 16)
-        cb = int(self.args.bg[5:7], 16)
-      elif self.args.bg.count(",") == 2:
-        cr, cg, cb = map(int, self.args.bg.split(","))
+      crgba = parseColor(self.args.bg, cmax=255, scale=255)
+      if crgba is not None:
+        cr, cg, cb = crgba[0], crgba[1], crgba[2]
       else:
         logger.error("Failed parsing --bg {!r}; ignoring".format(self.args.bg))
 
@@ -584,6 +658,7 @@ class SimulationDriver(object):
   def _gatherSimArgs(self): # {{{0
     "Gather the arguments to pass to the simulation"
     extraKwargs = {}
+    # Gather arguments from --config
     if self.args.config is not None:
       for val in self.args.config:
         if "=" in val:
@@ -591,6 +666,7 @@ class SimulationDriver(object):
           extraKwargs[k] = v
         else:
           extraKwargs[val] = True
+    # Gather general simulation arguments
     if self.args.debug:
       extraKwargs["debug"] = True
     if self.args.frozen:
@@ -614,6 +690,14 @@ class SimulationDriver(object):
       extraKwargs["mp4"] = self.args.mp4
     if self.args.urdf:
       extraKwargs["urdf"] = self.args.urdf
+    if self.args.urdfs:
+      urdfs = []
+      for g in self.args.urdfs:
+        urdfs.extend(glob.glob(g))
+      if "urdf" not in extraKwargs:
+        extraKwargs["urdf"] = []
+      extraKwargs["urdf"].extend(urdfs)
+    # Gather engine parameters
     eargs = {}
     if self.args.split_impulse:
       eargs["useSplitImpulse"] = 1
@@ -642,6 +726,77 @@ class SimulationDriver(object):
     }
   # 0}}}
 
+  def _getVideoPath(self): # {{{0
+    "Format a path to an mp4 file"
+    strftime = datetime.datetime.now().strftime
+    return os.path.join(os.getcwd(), strftime("pyb3-%Y%m%d%H%M%S.mp4"))
+  # 0}}}
+
+  def _setupKeyBinds(self): # {{{0
+    "Create the keypress manager and register keypress events"
+    kbm = KeyPressManager(self.app, debug=self.args.debug)
+    onMove = lambda keys: onMovementKey(self.app, keys)
+    for key in KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD:
+      kbm.bind(key, onMove, keys=True, repeat=True)
+    kbm.bind(" ", self._onKeyReset)
+    kbm.bind("h", self._onKeyHelp)
+    kbm.bind("b", self._onKeyDump)
+    kbm.bind("S-/", self._onKeyStatus)
+    kbm.bind(".", self._onKeyStep, repeat=True)
+    kbm.bind("m", self._onKeyToggleMousePicking)
+    kbm.bind("`", self._onKeyToggleKeyEvents)
+    kbm.bind("\\", self._onKeyToggleSim)
+    kbm.bind("f", self._onKeyFireProjectile, keys=True)
+    kbm.bind("F12", self._onKeyVideoLogging)
+    kbm.bind("^o", self.app.loadUrdf)
+
+    # Debugging: simulate a Bullet error
+    if self.args.debug:
+      def injectErrorFunc():
+        p.b3Print("Injected error message")
+        p.b3Warning("Injected error message")
+        p.b3Error("Injected error message")
+        p.getAABB(-1) # Results in pybullet.error
+      kbm.bind("^e", injectErrorFunc)
+    return kbm
+  # 0}}}
+
+  def _loop(self): # {{{0
+    "Main loop: process key events, mouse events, and changes to GUI settings"
+    tickCounter = 0
+    startTime = monotonic()
+    getTickTime = lambda f: startTime + INPUT_SLEEP * f
+    try:
+      while self.app.isConnected():
+        tickCounter += 1
+        # Handle key events
+        with self.kbm:
+          if self.args.debug:
+            self.kbm.debugDumpKeys()
+        # Handle mouse events
+        if self.args.debug:
+          for e in p.getMouseEvents():
+            tp, mx, my, bi, bs = e
+            tpname = B3.getMouseEventName(tp, short=True)
+            bname = B3.getMouseButtonName(bi, short=True)
+            bstates = B3.getMouseStateNames(bs, short=True)
+            print("{} {}: x={} y={} b={} {!r} s={} {}: {}".format(
+              tp, tpname, mx, my, bi, bname, bs, "+".join(bstates), e))
+        # Update continuous variables
+        self.app.tick()
+        # Sleep until the next tick
+        nextTickTime = getTickTime(tickCounter + 1)
+        dt = nextTickTime - monotonic()
+        if dt > 0:
+          time.sleep(dt)
+    except p.NotConnectedError:
+      pass
+    except p.error as e:
+      logger.exception(e)
+  # 0}}}
+
+  # Callback functions:
+
   def _onKeyReset(self): # {{{0
     "Callback: reset the simulation"
     self.app.reset()
@@ -657,7 +812,7 @@ class SimulationDriver(object):
     print("Tracked bodies: {}".format(self.app._bodies))
     for bnr in range(p.getNumBodies()):
       bid = p.getBodyUniqueId(bnr)
-      print("Body {} {}:".format(bnr, bid))
+      print("Body #{} ID={}:".format(bnr, bid))
       try:
         bd = self.app.getBodyDynamics(bid)
         p1, p2 = self.app.getAABB(bid)
@@ -665,30 +820,54 @@ class SimulationDriver(object):
         print("  Mass: {}".format(bd["mass"]))
         for s in self.app.getBodyShapes(bid):
           tn = B3.getGeometryName(s["geomType"])
-          print("  Shape: {}; Size: {}; Color: {}".format(tn, s["size"], s["rgbaColor"]))
+          print("  Shape: {}; Color: {}".format(tn, s["rgbaColor"]))
+          print("    Size: {}".format(s["size"]))
+          if np.linalg.norm(s["localFramePosition"]) > 0:
+            print("    Position: {}".format(s["localFramePosition"]))
+          if np.linalg.norm(s["localFrameOrientation"][:3]) > 0:
+            print("    Orientation: {}".format(s["localFrameOrientation"]))
+          if s["meshFileName"]:
+            print("    Mesh: {}".format(s["meshFileName"]))
+        for c in self.app.getBodyCollision(bid, 0):
+          print("  Collider: {} dim={}".format(c["geomType"], c["dimensions"]))
       except p.error as e:
         logger.exception(e)
         logger.error("Failed getting info: {}".format(e))
   # 0}}}
 
   def _onKeyStatus(self): # {{{0
-    "Callback: print status information"
-    c = formatVec(self.app.getCameraPos())
-    o = formatVec([self.app.getPitch(), self.app.getYaw(), self.app.getDistanceToTarget()])
-    t = formatVec(self.app.getTargetPos())
+    "Callback: print camera status information"
+    ci = self.app.getCamera()
+    cpos = ci[CAM_AXIS_TARGET] - ci["camForward"] * ci[CAM_AXIS_DIST]
+    corn = (ci[CAM_AXIS_PITCH], ci[CAM_AXIS_YAW], ci[CAM_AXIS_DIST])
     kwds = {
-      "camera": c,
-      "orientation": o,
-      "target": t,
+      "camera": formatVec(cpos),
+      "orientation": formatVec(corn),
+      "target": formatVec(ci[CAM_AXIS_TARGET]),
       "theta": GREEK_LOWER_THETA,
       "phi": GREEK_LOWER_PHI,
       "delta": GREEK_LOWER_DELTA
     }
     s = u"""
+Canvas size: {width} by {height} pixels
 Camera xyz: {camera}
 Camera {theta}{phi}{delta}: {orientation}
-Target xyz: {target}""".format(**kwds)
-    p.b3Print(s.encode("UTF-8"))
+Target xyz: {target}
+Camera up: {camUp}
+Camera forward: {camForward}
+View Matrix:
+{viewMat}
+Proj Matrix:
+{projMat}
+""".format(width=ci["width"],
+           height=ci["height"],
+           camUp=ci["camUp"],
+           camForward=ci["camForward"],
+           viewMat=ci["viewMat"].reshape(4, 4),
+           projMat=ci["projMat"].reshape(4, 4),
+           **kwds).strip()
+    sys.stderr.write(s.encode("UTF-8"))
+    sys.stderr.write("\n")
   # 0}}}
 
   def _onKeyStep(self): # {{{0
@@ -745,59 +924,6 @@ Target xyz: {target}""".format(**kwds)
       p.b3Print("Rendering terminated")
   # 0}}}
 
-  def _getVideoPath(self): # {{{0
-    "Format a path to an mp4 file"
-    strftime = datetime.datetime.now().strftime
-    return os.path.join(os.getcwd(), strftime("pyb3-%Y%m%d%H%M%S.mp4"))
-  # 0}}}
-
-  def _setupKeyBinds(self): # {{{0
-    "Create the keypress manager and register keypress events"
-    kbm = KeyPressManager(self.app, debug=self.args.debug)
-    onMove = lambda keys: onMovementKey(self.app, keys)
-    for key in KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD:
-      kbm.bind(key, onMove, keys=True, repeat=True)
-    kbm.bind(" ", self._onKeyReset)
-    kbm.bind("h", self._onKeyHelp)
-    kbm.bind("b", self._onKeyDump)
-    kbm.bind("S-/", self._onKeyStatus)
-    kbm.bind(".", self._onKeyStep, repeat=True)
-    kbm.bind("m", self._onKeyToggleMousePicking)
-    kbm.bind("`", self._onKeyToggleKeyEvents)
-    kbm.bind("\\", self._onKeyToggleSim)
-    kbm.bind("f", self._onKeyFireProjectile, keys=True)
-    kbm.bind("F12", self._onKeyVideoLogging)
-    return kbm
-  # 0}}}
-
-  def _loop(self): # {{{0
-    "Main loop: process key events, mouse events, and changes to GUI settings"
-    tickCounter = 0
-    startTime = monotonic()
-    getTickTime = lambda f: startTime + INPUT_SLEEP * f
-    try:
-      while self.app.isConnected():
-        tickCounter += 1
-        # Handle key events
-        with self.kbm:
-          if self.args.debug:
-            self.kbm.debugDumpKeys()
-        #for e in p.getMouseEvents():
-        #  tp, mx, my, bi, bs = e
-        #  print(e)
-        # Update continuous variables
-        self.app.tick()
-        # Sleep until the next tick
-        nextTickTime = getTickTime(tickCounter + 1)
-        dt = nextTickTime - monotonic()
-        if dt > 0:
-          time.sleep(dt)
-    except p.NotConnectedError:
-      pass
-    except p.error as e:
-      logger.exception(e)
-  # 0}}}
-
 ### Global functions: argument handling and entry point ###
 
 def parseArgs(): # {{{0
@@ -808,8 +934,10 @@ def parseArgs(): # {{{0
       epilog="""
 All unhandled arguments are passed to pybullet as-is. The -c argument can be
 used more than once. For --cam, "Df" means "default value". Passing --noloop
-will prevent some keybinds (pause, reset) from working.""",
-      formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+will prevent some keybinds (pause, reset) from working. All options after --
+will be ignored and passed to pybullet as-is. The default background color is
+hard-coded in the ExampleBrowser as r=150, g=170, b=170.""",
+      formatter_class=ArgumentDefaultsHelpFormatter)
   ap.add_argument("-h", "--help", action="store_true",
                   help="show this message and exit")
   ap.add_argument("--help-keys", action="store_true",
@@ -817,12 +945,12 @@ will prevent some keybinds (pause, reset) from working.""",
   ap.add_argument("--help-commands", action="store_true",
                   help="print command help information and exit")
   ap.add_argument("--help-all", action="store_true",
-                  help="show all help information")
+                  help="print all help information and exit")
   ap.add_argument("--width", metavar="NUM", type=int, default=1024,
                   help="width of the example browser window")
   ap.add_argument("--height", metavar="NUM", type=int, default=768,
                   help="height of the example browser window")
-  ap.add_argument("-n", "--num", metavar="N", type=int, default=10,
+  ap.add_argument("-n", "--num", metavar="N", type=int, default=25,
                   help="number of objects (general magnitude)")
   ap.add_argument("-r", "--radius", metavar="R", type=float, default=0.5,
                   help="object radius/size (general magnitude)")
@@ -835,39 +963,43 @@ will prevent some keybinds (pause, reset) from working.""",
   ap.add_argument("-c", dest="config", action="append", metavar="KEY[=VAL]",
                   help="simulation configuration option(s)")
   ap.add_argument("--bgr", metavar="NUM", type=int,
-                  help="background color: red component (0 to 255)")
+                  help="red background color component (0 to 255)")
   ap.add_argument("--bgg", metavar="NUM", type=int,
-                  help="background color: green component (0 to 255)")
+                  help="green background color component (0 to 255)")
   ap.add_argument("--bgb", metavar="NUM", type=int,
-                  help="background color: blue component (0 to 255)")
+                  help="blue background color component (0 to 255)")
   ap.add_argument("--bg", metavar="COLOR",
                   help="background color as either 3-tuple or hex string")
   ap.add_argument("--cam", metavar="P,Y,D,Tx,Ty,Tz", default="Df,Df,Df,Df,Df,Df",
-                  help="starting camera position and orientation; 'Df' for default")
+                  help="starting camera position and orientation")
   ap.add_argument("--cdp", metavar="NUM", type=float, default=KEY_STEP_PITCH,
-                  help="camera movement step: camera pitch")
+                  help="camera pitch movement step")
   ap.add_argument("--cdy", metavar="NUM", type=float, default=KEY_STEP_YAW,
-                  help="camera movement step: camera yaw")
+                  help="camera yaw movement step")
   ap.add_argument("--cdd", metavar="NUM", type=float, default=KEY_STEP_DIST,
-                  help="camera movement step: distance from camera to target")
+                  help="camera distance movement step: distance from camera to target")
   ap.add_argument("--cdtx", metavar="NUM", type=float, default=KEY_STEP_X,
-                  help="camera movement step: target x coordinate")
+                  help="camera target X axis movement step")
   ap.add_argument("--cdty", metavar="NUM", type=float, default=KEY_STEP_Y,
-                  help="camera movement step: target y coordinate")
+                  help="camera target Y axis movement step")
   ap.add_argument("--cdtz", metavar="NUM", type=float, default=KEY_STEP_Z,
-                  help="camera movement step: target z coordinate")
+                  help="camera target Z axis movement step")
   ap.add_argument("--noloop", action="store_true",
                   help="don't enter the main loop (for interactive execution)")
   ap.add_argument("--urdf", metavar="PATH", action="append",
                   help="load URDF object(s)")
+  ap.add_argument("--urdfs", metavar="GLOB", action="append",
+                  help="load all URDF objects matching GLOB")
   ap.add_argument("--save", metavar="PATH",
                   help="save .bullet file before starting the simulation")
   ap.add_argument("--load", metavar="PATH",
                   help="load .bullet file before starting the simulation")
   ap.add_argument("--mp4", metavar="PATH",
-                  help="path to mp4 file (F12 to toggle)")
+                  help="path to mp4 file (F12 to start/stop rendering)")
   ap.add_argument("--debug", action="store_true",
                   help="enable diagnostic (debugging) output")
+  ap.add_argument("--trace", action="store_true",
+                  help="enable tracing of various pybullet APIs")
 
   # Add experimental arguments
   pg = ap.add_argument_group("experimental arguments")
@@ -882,44 +1014,85 @@ will prevent some keybinds (pause, reset) from working.""",
   pg.add_argument("--friction-erp", metavar="VAL", type=float,
                   help="force a global friction error reduction parameter")
 
-  # Parse sys.argv
-  args, remainder = ap.parse_known_args()
+  # Make a copy of sys.argv for pre-processing
+  argv = sys.argv[1:]
 
-  # Log unhandled arguments
+  # Arguments not parsed by argparse
+  remainder = []
+  # Extract arguments after --
+  if "--" in argv:
+    idx = argv.index("--")
+    remainder.extend(argv[idx+1:])
+    argv = argv[:idx]
+
+  # Parse sys.argv and gather arguments not handled
+  args, remargs = ap.parse_known_args(argv)
+  remainder.extend(remargs)
+
+  # Log the unhandled arguments
   for arg in remainder:
     if arg.startswith("-"):
-      logger.info("Passing extra argunent: {!r}".format(arg))
+      logger.info("Passing extra argument to pybullet: {!r}".format(arg))
 
   # Print help message(s) and exit
+  center = lambda s: centerString(s, ch="=", padSpace=True)
   if args.help or args.help_all:
     ap.print_help()
     if args.help_keys or args.help_all:
-      sys.stderr.write("\nKeybind help text:\n")
-      sys.stderr.write(KEYBIND_HELP_TEXT.strip())
+      sys.stderr.write("\n{}\n".format(center("Keybind help text")))
+      sys.stderr.write(KEYBIND_HELP_TEXT.strip("\n"))
+      sys.stderr.write("\n\n")
+      sys.stderr.write(CAMERA_HELP_TEXT.strip("\n"))
     if args.help_commands or args.help_all:
-      sys.stderr.write("\n\nBullet base help text:\n")
-      sys.stderr.write(textwrap.dedent(BulletAppBase.__init__.__doc__))
-      sys.stderr.write("\n\nSimulation help text:\n")
-      sys.stderr.write(textwrap.dedent(Simulation.__init__.__doc__))
+      sys.stderr.write("\n\n{}\n".format(center("Bullet base help text")))
+      sys.stderr.write(textwrap.dedent(BulletAppBase.__init__.__doc__).strip("\n"))
+      sys.stderr.write("\n\n{}\n".format(center("Simulation help text")))
+      sys.stderr.write(textwrap.dedent(Simulation.__init__.__doc__).strip("\n"))
     sys.stderr.write("\n")
     raise SystemExit(0)
 
-  # Apply debugging configuration
+  # Enable debugging/verbose mode if requested
   if args.debug:
     logger.setLevel(logging.DEBUG)
-    remainder.append("--verbose")
+    if "--verbose" not in remainder:
+      remainder.append("--verbose")
 
-  logger.debug("Remaining args: {!r}".format(remainder))
   return args, remainder
 # 0}}}
 
 if __name__ == "__main__": # {{{0
-  # If python -i, run PYTHONSTARTUP
+  # If python -i, run PYTHONSTARTUP and add --noloop
   if sys.flags.interactive and "PYTHONSTARTUP" in os.environ:
     execfile(os.environ["PYTHONSTARTUP"])
+    if "--noloop" not in sys.argv:
+      sys.argv.append("--noloop")
 
   # Parse sys.argv
   args, remainder = parseArgs()
+
+  # Add debugging if desired
+  if args.trace:
+    p.addUserDebugLine = pyb3.addLogging(p.addUserDebugLine)
+    p.addUserDebugParameter = pyb3.addLogging(p.addUserDebugParameter)
+    p.changeDynamics = pyb3.addLogging(p.changeDynamics)
+    p.configureDebugVisualizer = pyb3.addLogging(p.configureDebugVisualizer)
+    p.connect = pyb3.addLogging(p.connect)
+    p.createCollisionShape = pyb3.addLogging(p.createCollisionShape)
+    p.createMultiBody = pyb3.addLogging(p.createMultiBody)
+    p.createVisualShape = pyb3.addLogging(p.createVisualShape)
+    p.getAABB = pyb3.addLogging(p.getAABB)
+    p.getBaseVelocity = pyb3.addLogging(p.getBaseVelocity)
+    p.getCollisionShapeData = pyb3.addLogging(p.getCollisionShapeData)
+    p.getDebugVisualizerCamera = pyb3.addLogging(p.getDebugVisualizerCamera)
+    p.getDynamicsInfo = pyb3.addLogging(p.getDynamicsInfo)
+    p.getVisualShapeData = pyb3.addLogging(p.getVisualShapeData)
+    p.loadSoftBody = pyb3.addLogging(p.loadSoftBody)
+    p.loadTexture = pyb3.addLogging(p.loadTexture)
+    p.loadURDF = pyb3.addLogging(p.loadURDF)
+    p.resetDebugVisualizerCamera = pyb3.addLogging(p.resetDebugVisualizerCamera)
+    p.setAdditionalSearchPath = pyb3.addLogging(p.setAdditionalSearchPath)
+    p.setInternalSimFlags = pyb3.addLogging(p.setInternalSimFlags)
+    p.setPhysicsEngineParameter = pyb3.addLogging(p.setPhysicsEngineParameter)
 
   # Create and begin the simulation driver
   driver = SimulationDriver(args, remainder)

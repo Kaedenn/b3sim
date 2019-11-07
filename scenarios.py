@@ -107,22 +107,18 @@ class ScenarioBase(object): # {{{0
 # 0}}}
 
 class EmptyPlaneScenario(ScenarioBase): # {{{0
-  """
-  Create an empty plane
-    width, length: app.worldSizeMax() * app.worldSize()
-    thickness: app.wallThickness()
-  """
+  "Create an empty plane"
   def __init__(self, name=None, **kwargs):
     super(EmptyPlaneScenario, self).__init__(_name(self, name), **kwargs)
 
   def setup(self, app):
     objs = super(EmptyPlaneScenario, self).setup(app)
-    pos = app.worldFloor()
-    wt = np.float(app.wallThickness())
-    ws = np.float(app.worldSize())
-    wsm = np.float(app.worldSizeMax())
-    exts = wsm * ws * V3(1, 1, 0) + wt * V3(1, 1, 1)
-    objs.append(app.createBox(mass=0, pos=pos, exts=exts, rgba=C4_WHT, restitution=1))
+    tex = None
+    if app.hasArg("planeTexture"):
+      tex = app.getArg("planeTexture")
+    elif os.path.exists("data/white.png"):
+      tex = "data/white.png"
+    objs.append(app.createPlane(app.worldFloor(), texture=tex))
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -130,11 +126,12 @@ class BoxedScenario(ScenarioBase): # {{{0
   """
   Create walls around the simulation objects
 
-  Walls enclose a cube with side length self._ws centered around 0, 0, with
+  Walls enclose a cube with side length app._ws centered around (0, 0) with
   the bottom face co-planar to the world plane.
 
   Available interior area is exactly
-    -(self._ws - self._wt) < {x,y,z} < self._ws - self._wt
+    -(app._ws - app._wt) < {x,y} < app._ws - app._wt
+    -app._ws < z
   """
   def __init__(self, name=None, **kwargs):
     super(BoxedScenario, self).__init__(_name(self, name), **kwargs)
@@ -148,12 +145,12 @@ class BoxedScenario(ScenarioBase): # {{{0
     wcy = V3(ws+wt, wt, ws+wt)
     wcz = V3(ws+wt, ws+wt, wt)
     objs.extend([
-      app.createBox(mass=0, pos= ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_RED, a)),
-      app.createBox(mass=0, pos=-ws * AXIS_X, exts=wcx, rgba=withAlpha(C3_BLU, a)),
-      app.createBox(mass=0, pos= ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_GRN, a)),
-      app.createBox(mass=0, pos=-ws * AXIS_Y, exts=wcy, rgba=withAlpha(C3_MAG, a)),
-      app.createBox(mass=0, pos= ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_GRN, a)),
-      app.createBox(mass=0, pos=-ws * AXIS_Z, exts=wcz, rgba=withAlpha(C3_BLU, a)),
+      app.createBox(mass=0, pos= ws * V3_X, exts=wcx, rgba=withAlpha(C3_RED, a)),
+      app.createBox(mass=0, pos=-ws * V3_X, exts=wcx, rgba=withAlpha(C3_BLU, a)),
+      app.createBox(mass=0, pos= ws * V3_Y, exts=wcy, rgba=withAlpha(C3_GRN, a)),
+      app.createBox(mass=0, pos=-ws * V3_Y, exts=wcy, rgba=withAlpha(C3_MAG, a)),
+      app.createBox(mass=0, pos= ws * V3_Z, exts=wcz, rgba=withAlpha(C3_GRN, a)),
+      app.createBox(mass=0, pos=-ws * V3_Z, exts=wcz, rgba=withAlpha(C3_BLU, a)),
     ])
     return self._applyTransforms(app, objs)
 # 0}}}
@@ -177,7 +174,7 @@ class BrickTower1Scenario(ScenarioBase): # {{{0
     b2e = V3(bl/2, bw/2, bh/2)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
-    bz = lambda i: i * bh
+    bz = lambda i: bh * i + bh/2
     boxes = []
     for i in range(n):
       for j in range(n):
@@ -210,7 +207,7 @@ class BrickTower2Scenario(ScenarioBase): # {{{0
     bext = V3(bs, bs, bh/2)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
-    bz = lambda i: i * bh
+    bz = lambda i: bh * i + bh/2
     boxes = []
     for i in range(n):
       for j in range(n):
@@ -243,7 +240,7 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
     b3e = V3(n*bd/2, n*bd/2, bh/8)
     bx = lambda i: bd * (i + (1.0-n)/2)
     by = lambda i: bd * (i + (1.0-n)/2)
-    bz = lambda i: bh * i
+    bz = lambda i: bh * i + bh/2
     boxes = []
     for k in range(layers):
       for i in range(n):
@@ -284,7 +281,7 @@ class ProjectileScenario(ScenarioBase): # {{{0
     if self._shape == ProjectileScenario.SHAPE_SPHERE:
       s = app.createSphere(mass, spos, radius=size)
     elif self._shape == ProjectileScenario.SHAPE_BOX:
-      s = app.createBox(mass=mass, exts=size * V3_111, pos=spos)
+      s = app.createBox(mass=mass, exts=size * V3_XYZ, pos=spos)
     elif self._shape == ProjectileScenario.SHAPE_CAPSULE:
       s = app.createCapsule(mass=mass, pos=spos, radii=(size, size/4))
     else:
@@ -313,11 +310,12 @@ class BallpitScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(BallpitScenario, self).setup(app)
-    xmin, xmax = app.worldXMin(), app.worldXMax()
-    ymin, ymax = app.worldYMin(), app.worldYMax()
-    zmin, zmax = app.worldZMin(), app.worldZMax()
     mass = app.objectMass()
     rad = app.objectRadius()
+    dx = app.numObjects() ** 0.5 / rad
+    xmin, xmax = -dx, dx
+    ymin, ymax = -dx, dx
+    zmin, zmax = -dx, dx
     for i in range(app.numObjects()):
       spos = V3(
         random.uniform(xmin, xmax),
@@ -343,11 +341,17 @@ class BunnyScenario(ScenarioBase): # {{{0
     kwargs = {
       "pos": app.worldFloor() + V3(z=self.get("bunnyZ", 5, float)),
       "orn": p.getQuaternionFromEuler([math.pi/2, 0, 0]),
-      "scale": self.get("bunnySize", 2, float),
+      "scale": self.get("bunnySize", 10, float),
       "mass": self.get("bunnyMass", app.objectMass() * 10, float),
       "margin": 0.5
     }
-    objs.append(app.loadSoftBody("data/bunny.obj", **kwargs))
+    b1 = app.loadSoftBody("data/bunny.obj", **kwargs)
+    kwargs["pos"][2] += self.get("bunnyZ", 5, float)
+    kwargs["mass"] *= 3
+    kwargs["margin"] = 0.5
+    b2 = app.loadSoftBody("data/bunny.obj", **kwargs)
+    objs.extend((b1, b2))
+    app.setBodyTexture(b1, "data/white.png")
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -375,3 +379,16 @@ class RandomUrdfScenario(ScenarioBase): # {{{0
     return objs
 # 0}}}
 
+class RopeScenario(ScenarioBase): # {{{0
+  """
+  Add some objects suspended by ropes
+  """
+  def __init__(self, name=None, **kwargs):
+    super(RopeScenario, self).__init__(_name(self, name), **kwargs)
+
+  def setup(self, app):
+    objs = super(RopeScenario, self).setup(app)
+    anchor = app.createBox(mass=0, pos=5 * V3_Z, exts=V3(0.25, 0.25, 0.25))
+    objs.append(anchor)
+    return objs
+# 0}}}

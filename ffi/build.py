@@ -73,20 +73,18 @@ def compile_module(name, cdef, code, *args, **kwargs):
 
 def parse_module(modfile):
   "Parse a module file"
-  module = open(modfile).read()
-  moddef = ast.literal_eval(module)
+  moddef = ast.literal_eval(open(modfile).read())
   logger.debug("Parsed module: {!r}".format(moddef))
-  mname, mcode = moddef["name"], moddef["code"]
-  mcdef = moddef.get("cdef", "")
-  margs = moddef.get("extra_args", ())
-  mkwargs = moddef.get("extra_kwargs", {})
-  return {
-    "name": mname,
-    "code": mcode,
-    "cdef": mcdef,
-    "extra_args": margs,
-    "extra_kwargs": mkwargs
+  modresult = {
+    "name": moddef["name"],
+    "code": moddef["code"],
+    "cdef": moddef.get("cdef", ""),
+    "extra_args": moddef.get("extra_args", ()),
+    "extra_kwargs": moddef.get("extra_kwargs", {})
   }
+  if moddef.get("_disabled", False):
+    modresult["_disabled"] = True
+  return modresult
 
 def special_xkeys_module():
   "Create a special X11/Xutil.h keys module"
@@ -150,9 +148,9 @@ The following special modules are available: "xkeys".
     mcode = module["code"]
     margs = module["extra_args"]
     mkwds = module["extra_kwargs"]
-    logger.info("Processing module {}...".format(mname))
+    logger.debug("Processing module {}...".format(mname))
     try:
-      if args.action == "build":
+      if args.action == "build" and not module.get("_disabled", False):
         # Compile module
         logger.debug("Compiling module {}...".format(mname))
         compile_module(mname, mcdef, mcode, tmpdir=args.t, *margs, **mkwds)
@@ -182,7 +180,8 @@ The following special modules are available: "xkeys".
               os.remove(fname)
       elif args.action == "list":
         # Print module information
-        print("{}\t{}\t{!r}".format(modfile, mname, retab(mcode)))
+        status = "Disabled" if module.get("_disabled", False) else "Enabled"
+        print("{}\t{}\t{}\t{!r}".format(modfile, mname, status, retab(mcode)))
     except (IOError, ValueError) as e:
       logger.error("Invalid module {!r}: {}".format(module, e))
     except cffi.VerificationError as e:

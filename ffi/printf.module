@@ -5,6 +5,7 @@
 # the amount of memory needed to store a formatted string.
 
 {
+  "_disabled": True, # Remove to enable
   "name": "printf",
   "cdef": """
 int printf(const char* format, ...);

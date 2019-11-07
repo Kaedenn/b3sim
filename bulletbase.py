@@ -12,8 +12,8 @@ order to provide compatibility across different versions of the pybullet API.
 """
 
 # TODO:
-# readUserDebugButton
-# clearUserDebugButton (or some way to reset it)
+# Value caching for functions called multiple times per loop
+#   e.g. getCamera(), body info, etc.
 
 import pyb3
 from pyb3 import pybullet as p
@@ -26,6 +26,59 @@ __all__ = ["B3", "BulletAppBase"]
 
 class B3(object): # {{{0
   "Functions for mapping constants to strings and strings to constants"
+
+  @staticmethod
+  def getMouseEventName(e, short=False): # {{{1
+    "Get the pybullet name for the given mouse event constant"
+    if e == p.MOUSE_MOVE_EVENT:
+      return "MOVE" if short else "MOUSE_MOVE_EVENT"
+    if e == p.MOUSE_BUTTON_EVENT:
+      return "BUTTON" if short else "MOUSE_BUTTON_EVENT"
+    return "UNKNOWN"
+  # 1}}}
+
+  @staticmethod
+  def getMouseButtonName(b, short=False): # {{{1
+    "Get the pybullet name for the given mouse button constant"
+    if b == p.MOUSE_BUTTON_NONE:
+      return "NONE" if short else "MOUSE_BUTTON_NONE"
+    if b == p.MOUSE_BUTTON_LEFT:
+      return "LMB" if short else "MOUSE_BUTTON_LEFT"
+    if b == p.MOUSE_BUTTON_RIGHT:
+      return "RMB" if short else "MOUSE_BUTTON_RIGHT"
+    if b == p.MOUSE_WHEEL:
+      return "WHEEL" if short else "MOUSE_WHEEL"
+    return "UNKNOWN"
+  # 1}}}
+
+  @staticmethod
+  def getMouseStateNames(s, short=False): # {{{1
+    "Return a list of states corresponding to the given value"
+    names = []
+    if s == 0:
+      names.append("NONE")
+    if s & p.MOUSE_PRESS == p.MOUSE_PRESS:
+      names.append("PRESS" if short else "MOUSE_PRESS")
+    if s & p.MOUSE_RELEASE == p.MOUSE_RELEASE:
+      names.append("RELEASE" if short else "MOUSE_RELEASE")
+    return names
+  # 1}}}
+
+  @staticmethod
+  def getKeyName(k): # {{{1
+    "Get the name for the given keyboard key"
+    try:
+      import xkeys
+      for name in dir(xkeys.lib):
+        if name.startswith("Key_") and getattr(xkeys.lib, name) == k:
+          return name[4:]
+    except ImportError:
+      pass
+    for name in dir(p):
+      if name.startswith("B3G_") and getattr(p, name) == k:
+        return name[4:]
+    return "Unknown"
+  # 1}}}
 
   @staticmethod
   def getConnectionName(c): # {{{1
@@ -175,12 +228,13 @@ class BulletAppBase(object):
                createVisualShapeKwargs=None,
                **kwargs):
     """
-    Extra keyword arguments:
+    Extra keyword arguments extracted from **kwargs:
       debug         enable some debug output (False)
-      gravityX      default gravity for x (0)
-      gravityY      default gravity for y (0)
-      gravityZ      default gravity for z (-9.8)
+      gravityX      default gravity for x (0) (between -20 and 20)
+      gravityY      default gravity for y (0) (between -20 and 20)
+      gravityZ      default gravity for z (-9.8) (between -20 and 20)
     """
+    self._args = kwargs
     self._debug = getRemove(kwargs, "debug", False)
     self._defaultGravity = {
       "x": getRemove(kwargs, "gravityX", 0, float),
@@ -189,12 +243,13 @@ class BulletAppBase(object):
     }
     self._server = None
     self._stateLogger = None
+    self._buttons = {}
     self._bodies = set()
     self._colliders = set()
     self._visualShapes = set()
+    self._textures = {}
     self._covValues = {}
     self._debugConfigs = {}
-    self._args = kwargs
     self._engineParams = _or(engineParams, {})
     self._connectArgs = _or(connectArgs, "")
     self._createBodyArgs = (
@@ -208,25 +263,6 @@ class BulletAppBase(object):
         _or(createVisualShapeKwargs, {}))
     if connect:
       self.connect()
-  # 1}}}
-
-  def toggleCov(self, cov, forceValue=None): # {{{1
-    "Toggle a debug configuration option"
-    if forceValue is not None:
-      self._covValues[cov] = forceValue
-    elif cov in self._covValues:
-      self._covValues[cov] = not self._covValues[cov]
-    else:
-      self._covValues[cov] = False
-    cv = self._covValues[cov]
-    logger.debug("Setting COV {} to {}".format(B3.getCovName(cov), cv))
-    p.configureDebugVisualizer(cov, 1 if cv else 0)
-    return cv
-  # 1}}}
-
-  def covActive(self, cov): # {{{1
-    "Return whether or not the debug configuration option is active"
-    return self._covValues.get(cov, False)
   # 1}}}
 
   def hasArg(self, arg): # {{{1
@@ -256,17 +292,17 @@ class BulletAppBase(object):
     cargs.extend(parseArgObj(args))
     cargs = " ".join(cargs)
 
-    # Start shared memory server and GUI client
-    logger.debug("Starting SHARED_MEMORY server: {}".format(cargs))
-    self._server_shm = p.connect(p.SHARED_MEMORY, options=cargs)
+    # Start and connect to server
     logger.debug("Starting GUI server: {}".format(cargs))
-    self._server = p.connect(p.GUI, options=cargs)
+    self._server = p.connect(p.GUI_SERVER, options=cargs)
     p.setInternalSimFlags(0)
+    if pyb3.HAS_PYB3_DATA:
+      p.setAdditionalSearchPath(pyb3.pybullet_data.getDataPath())
 
     # Add standard debug config sliders
-    self.addSlider("Gravity X", -10, 10, self._defaultGravity["x"])
-    self.addSlider("Gravity Y", -10, 10, self._defaultGravity["y"])
-    self.addSlider("Gravity Z", -10, 10, self._defaultGravity["z"])
+    self.addSlider("Gravity X", -20, 20, self._defaultGravity["x"])
+    self.addSlider("Gravity Y", -20, 20, self._defaultGravity["y"])
+    self.addSlider("Gravity Z", -20, 20, self._defaultGravity["z"])
   # 1}}}
 
   def isConnected(self): # {{{1
@@ -274,21 +310,31 @@ class BulletAppBase(object):
     return p.isConnected()
   # 1}}}
 
-  def saveBullet(self, fname): # {{{1
-    "Save a snapshot of the world"
-    app.saveBullet(fname)
+  # Debug interface functions:
+
+  def toggleCov(self, cov, forceValue=None): # {{{1
+    "Toggle a debug configuration option"
+    if forceValue is not None:
+      self._covValues[cov] = forceValue
+    elif cov in self._covValues:
+      self._covValues[cov] = not self._covValues[cov]
+    else:
+      self._covValues[cov] = False
+    cv = self._covValues[cov]
+    logger.debug("Setting COV {} to {}".format(B3.getCovName(cov), cv))
+    p.configureDebugVisualizer(cov, 1 if cv else 0)
+    return cv
   # 1}}}
 
-  def loadBullet(self, fname): # {{{1
-    "Load a snapshot of the world"
-    app.loadBullet(fname)
+  def covActive(self, cov): # {{{1
+    "Return whether or not the debug configuration option is active"
+    return self._covValues.get(cov, False)
   # 1}}}
 
   def addSlider(self, name, min, max, dflt=None): # {{{1
     "Add user debug parameter"
     start = min if dflt is None else dflt
     self._debugConfigs[name] = p.addUserDebugParameter(name, min, max, start)
-    logger.debug("addDebug({!r}, min={}, max={}, start={})".format(name, min, max, start))
   # 1}}}
 
   def getSlider(self, name, tp=float): # {{{1
@@ -310,6 +356,8 @@ class BulletAppBase(object):
       return p.readUserDebugButton(self._debugConfigs[name])
     except NotImplementedError as e:
       logger.error(e)
+    except p.error as e:
+      logger.error(e)
   # 1}}}
 
   def resetButton(self, name): # {{{1
@@ -318,7 +366,35 @@ class BulletAppBase(object):
       p.resetUserDebugButton(self._debugConfigs[name])
     except NotImplementedError as e:
       logger.error(e)
+    except p.error as e:
+      logger.error(e)
   # 1}}}
+
+  def addButtonEvent(self, name, func): # {{{0
+    """Add a button which calls func() when pressed. Requires self.tick() be
+    called in order to work."""
+    self._buttons[name] = {
+      "name": name,
+      "id": self.addButton(name),
+      "func": func
+    }
+  # 0}}}
+
+  def drawLine(self, p1, p2, thickness=1, color=C3_BLK): # {{{1
+    "Draw a line from p1 to p2"
+    p.addUserDebugLine(p1, p2, color, thickness)
+  # 1}}}
+
+  def drawText(self, t, pt, size=None, color=C3_BLK): # {{{1
+    "Draw text at the given point"
+    kwargs = {}
+    kwargs["textColorRGB"] = color
+    if size is not None:
+      kwargs["textSize"] = size
+    p.addUserDebugText(t, pt, **kwargs)
+  # 1}}}
+
+  # Main loop functions:
 
   def updateGravity(self): # {{{1
     "Apply gravity debug configuration values"
@@ -339,7 +415,7 @@ class BulletAppBase(object):
       logger.debug("Applying engine parameters: {}".format(self._engineParams))
       p.setPhysicsEngineParameter(**self._engineParams)
     try:
-      if self._debug:
+      if self._debug or "--verbose" in self._connectArgs:
         p.setPhysicsEngineParameter(verboseMode=1)
     except (TypeError, p.error) as e:
       # Unimplemented; ignore it
@@ -385,6 +461,34 @@ class BulletAppBase(object):
     p.stepSimulation()
   # 1}}}
 
+  def tick(self): # {{{0
+    "Process main-loop events: gravity, button functions, etc"
+    self.updateGravity()
+    for bname in self._buttons:
+      if self.getButton(bname):
+        self._buttons[bname]["func"]()
+        self.resetButton(bname)
+  # 0}}}
+
+  # Asset functions:
+
+  def saveBullet(self, fname): # {{{1
+    "Save a snapshot of the world"
+    app.saveBullet(fname)
+  # 1}}}
+
+  def loadBullet(self, fname): # {{{1
+    "Load a snapshot of the world"
+    app.loadBullet(fname)
+  # 1}}}
+
+  def getTexture(self, path): # {{{1
+    "Load and return a unique ID for the given texture file"
+    if path not in self._textures:
+      self._textures[path] = p.loadTexture(path)
+    return self._textures[path]
+  # 1}}}
+
   # Camera functions:
 
   def getCamera(self, val=None): # {{{1
@@ -427,21 +531,16 @@ class BulletAppBase(object):
       CAM_AXIS_TARGET: kwargs.get(CAM_AXIS_TARGET, ci[CAM_AXIS_TARGET])
     }
     p.resetDebugVisualizerCamera(
-        cameraDistance=vals[CAM_AXIS_DIST],
-        cameraYaw=vals[CAM_AXIS_YAW],
-        cameraPitch=vals[CAM_AXIS_PITCH],
-        cameraTargetPosition=vals[CAM_AXIS_TARGET])
+      cameraDistance=vals[CAM_AXIS_DIST],
+      cameraYaw=vals[CAM_AXIS_YAW],
+      cameraPitch=vals[CAM_AXIS_PITCH],
+      cameraTargetPosition=vals[CAM_AXIS_TARGET])
   # 1}}}
 
   def moveCamera(self, **kwargs): # {{{1
     "Adjust the camera by the values given"
     ci = self.getCamera()
-    vals = applyAxisMovements(ci, **kwargs)
-    p.resetDebugVisualizerCamera(
-        cameraDistance=vals[CAM_AXIS_DIST],
-        cameraYaw=vals[CAM_AXIS_YAW],
-        cameraPitch=vals[CAM_AXIS_PITCH],
-        cameraTargetPosition=vals[CAM_AXIS_TARGET])
+    self.setCamera(**applyAxisMovements(ci, **kwargs))
   # 1}}}
 
   def getPitch(self): # {{{1
@@ -464,12 +563,12 @@ class BulletAppBase(object):
     self.setCamera(**{CAM_AXIS_YAW: val})
   # 1}}}
 
-  def getDistanceToTarget(self): # {{{1
+  def getTargetDistance(self): # {{{1
     "Get value of CAM_AXIS_DIST"
     return self.getCamera(CAM_AXIS_DIST)
   # 1}}}
 
-  def setDistanceToTarget(self, val): # {{{1
+  def setTargetDistance(self, val): # {{{1
     "Set value of CAM_AXIS_DIST"
     self.setCamera(**{CAM_AXIS_DIST: val})
   # 1}}}
@@ -524,7 +623,7 @@ class BulletAppBase(object):
   def getBodyCollision(self, oid, link=-1): # {{{1
     "Return information on the body's collider"
     colliders = []
-    for entry in p.getCollisionShapeData(oid, -1):
+    for entry in p.getCollisionShapeData(oid, link):
       colliders.append({
         "geomType": entry[2],
         "dimensions": np.array(entry[3]),
@@ -562,7 +661,7 @@ class BulletAppBase(object):
   # 1}}}
 
   def getBodies(self): # {{{1
-    "Iterate over every body (returns a body's unique ID)"
+    "Iterate over every body (returns a body's index)"
     for bid in range(p.getNumBodies()):
       yield bid
   # 1}}}
@@ -582,24 +681,43 @@ class BulletAppBase(object):
   def createMultiBody(self, *args, **kwargs): # {{{1
     "Create a MultiBody, asserting success"
     r = getRemove(kwargs, "restitution", 0, float)
+    color = None
+    if "color" in kwargs:
+      color = kwargs["color"]
+      del kwargs["color"]
+    elif "rgba" in kwargs:
+      color = kwargs["rgba"]
+      del kwargs["rgba"]
     bargs = _merge(self._createBodyArgs[0], args)
     bkwargs = _merge(self._createBodyArgs[1], kwargs)
-    logger.debug("p.createMultiBody(*{}, **{})".format(bargs, bkwargs))
-    b = p.createMultiBody(*bargs, **bkwargs)
-    assertSuccess(b, "createMultiBody")
+    b = assertSuccess(p.createMultiBody(*bargs, **bkwargs), "createMultiBody")
     if r != 0:
       p.changeDynamics(b, -1, restitution=r)
+    if color is not None:
+      self.setBodyColor(b, parseColor(color))
     self._bodies.add(b)
     return b
   # 1}}}
 
   def createVisualShape(self, *args, **kwargs): # {{{1
     "Create a visual shape, asserting success"
+    color = None
+    if "color" in kwargs:
+      color = kwargs["color"]
+      del kwargs["color"]
+    if "rgba" in kwargs:
+      color = kwargs["rgba"]
+      del kwargs["rgba"]
+    if "texture" in kwargs:
+      kwargs["textureUniqueId"] = self.getTexture(kwargs["texture"])
+      del kwargs["texture"]
     vargs = _merge(self._createVisualShapeArgs[0], args)
     vkwargs = _merge(self._createVisualShapeArgs[1], kwargs)
     ret = p.createVisualShape(*vargs, **vkwargs)
     assertSuccess(ret, "createVisualShape")
     self._visualShapes.add(ret)
+    if color is not None:
+      self.setBodyColor(b, parseColor(color))
     return ret
   # 1}}}
 
@@ -644,6 +762,15 @@ class BulletAppBase(object):
     return self.createMultiBody(mass, cid, vid, pos, **kwargs)
   # 1}}}
 
+  def createPlane(self, pos, texture=None, **kwargs): # {{{1
+    "Create a plane at the given position, optionally with a texture"
+    c = self.createCollision(p.GEOM_PLANE)
+    b = self.createMultiBody(0, c, basePosition=pos, **kwargs)
+    if texture is not None:
+      self.setBodyTexture(b, texture)
+    return b
+  # 1}}}
+
   def loadSoftBody(self, path, pos=None, orn=None, scale=None, mass=None, # {{{1
                    margin=None):
     "Load a soft body into the world"
@@ -668,35 +795,56 @@ class BulletAppBase(object):
 
   def loadURDF(self, path, *args, **kwargs): # {{{1
     "Load object defined by the URDF file"
-    idx = p.loadURDF(path, useMaximalCoordinates=True, *args, **kwargs)
+    uargs = tuple(args)
+    ukwargs = dict(kwargs)
+    if self._createBodyArgs[1].get("useMaximalCoordinates", False):
+      ukwargs["useMaximalCoordinates"] = True
+    idx = p.loadURDF(path, *uargs, **ukwargs)
     assertSuccess(idx, "loadURDF")
     self._bodies.add(idx)
     return idx
   # 1}}}
 
-  def setBodyColor(self, idx, rgba): # {{{1
-    "Change a body's color to the given 4-tuple"
+  # Object management:
+
+  def removeBody(self, bodyId=None, bodyIndex=None): # {{{0
+    "Remove a body by either ID or index"
+    bid = None
+    if bodyId is not None:
+      bid = bodyId
+    elif bodyIndex is not None:
+      bid = p.getBodyUniqueId(bodyIndex)
+    else:
+      raise ValueError("Must specify a body to remove")
+    if bid in self._bodies:
+      self._bodies.remove(bid)
+    p.removeBody(bid)
+  # 0}}}
+
+  def removeLastBody(self): # {{{0
+    "Remove the most recently added body. Will not remove the first body."
+    nr = p.getNumBodies()
+    if nr == 0:
+      logger.warning("No body left to remove")
+    else:
+      bid = p.getBodyUniqueId(nr-1)
+      if nr == 1:
+        logger.warning("Refusing to remove last object {}".format(bid))
+      else:
+        self.removeBody(bodyId=bid)
+  # 0}}}
+
+  def setBodyColor(self, idx, rgba, link=-1): # {{{1
+    "Change a body's color to the given 3-tuple or 4-tuple"
     color = list(rgba)
     if len(color) == 3:
       color.append(1)
-    p.changeVisualShape(idx, -1, rgbaColor=color)
+    p.changeVisualShape(idx, link, rgbaColor=color)
   # 1}}}
 
-  # Debug interfaces:
-
-  def drawLine(self, p1, p2, thickness=1, color=None): # {{{1
-    "Draw a line from p1 to p2"
-    c = C3_BLK if color is None else color
-    p.addUserDebugLine(p1, p2, c, thickness)
-  # 1}}}
-
-  def drawText(self, t, pt, size=None, color=None): # {{{1
-    "Draw text at the given point"
-    kwargs = {}
-    kwargs["textColorRGB"] = C3_BLK if color is None else color
-    if size is not None:
-      kwargs["textSize"] = size
-    p.addUserDebugText(t, pt, **kwargs)
+  def setBodyTexture(self, idx, path, link=-1): # {{{1
+    "Change a body's texture to use the given texture file"
+    p.changeVisualShape(idx, link, textureUniqueId=self.getTexture(path))
   # 1}}}
 
 # vim: set ts=2 sts=2 sw=2 et:

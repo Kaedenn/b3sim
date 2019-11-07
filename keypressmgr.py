@@ -6,25 +6,27 @@ Keypress Management
 The KeyPressManager class tracks keypresses and invokes the bound functions as
 per the requested state information.
 
-Example:
+  kpm = KeyPressManager()
+  kpm.bind(key, function, *args, **kwargs)
+  kpm.bindAll(keys, function, *args, **kwargs)
 
-kpm = KeyPressManager()
-kpm.bind(key, function, *args, **kwargs)
-kpm.bindAll(keys, function, *args, **kwargs)
+  while True:
+    with kpm:
+      # Bound functions called automatically
+      # Process extra keys if desired:
+      if isPressed(key):
+        keyIsPressed()
 
-while True:
-  with kpm:
-    # Bound functions called automatically
-    # Process extra keys if desired:
-    if isPressed(key):
-      keyIsPressed()
+Alternatively, kpm.beginRegion() and kpm.endRegion() can be used instead of
+__enter__ and __exit__.
 
 Key compositions (using Control, Alt, and Shift) are possible using the
-notation documented in _parseKey, where x is any key:
+notation documented in parseKey, where x is any key:
   x       x
-  X       Shift+x (where X is the uppercase x key)
+  X       Shift+x (where X is an uppercase Latin letter)
   S-x     Shift+x
   C-x     Control+x
+  M-x     Alt-x
   S-C-x   Shift+Control+x
 
 Note that symbol compositions are *not* supported. Functions bound to "!", for
@@ -101,7 +103,7 @@ KEY_CLASS_NUMPAD_ARROWS = (
 # Number keys
 KEY_CLASS_NUMBERS = tuple("0123456789")
 
-# Letters
+# Letter keys
 KEY_CLASS_LETTERS = tuple(string.ascii_lowercase)
 
 # Mapping from key codes to key classes. Values can be pairs (key code,
@@ -136,8 +138,8 @@ KEY_MAP = {
   "k9": p.B3G_KP_9
 }
 
-KEY_MAP.update(dict((v,ord(v)) for v in KEY_CLASS_NUMBERS))
-KEY_MAP.update(dict((v,ord(v)) for v in KEY_CLASS_LETTERS))
+KEY_MAP.update(dict((v, ord(v)) for v in KEY_CLASS_NUMBERS))
+KEY_MAP.update(dict((v, ord(v)) for v in KEY_CLASS_LETTERS))
 
 def getKeyStateString(state): # {{{0
   "Obtain a string describing the state code"
@@ -161,8 +163,8 @@ def getKeyName(key): # {{{0
 
 def isPressed(keys, key, states=KEY_ANY_STATE, modifiers=()): # {{{0
   "Return True if an event exists for the given key"
-  code, mods = _parseKey(key)
-  pressed = (keys.get(code, 0) & states != 0)
+  code, mods = parseKey(key)
+  pressed = ((keys.get(code, 0) & states) != 0)
   # Ensure all modifiers are present, regardless of value
   for m in set(modifiers).union(set(mods)):
     if m not in keys:
@@ -198,9 +200,8 @@ def _stateGetter(*states): # {{{0
   return decoratorFunc
 # 0}}}
 
-def _parseKey(key): # {{{0
-  """Covert a key to a code (with modifiers) understood by Bullet. Returns a
-  pair (key_code, (modifiers...)).
+def parseKey(key): # {{{0
+  """Parse a key as understood by Bullet. Returns a pair (code, (mods...)).
 
   If key is a string, the following modifiers are understood:
     "S-"    Require Shift to be pressed
@@ -211,6 +212,8 @@ def _parseKey(key): # {{{0
     "S-a"   (p.B3G_A, (p.B3G_SHIFT,))
     "^S-a"  (p.B3G_A, (p.B3G_SHIFT, p.B3G_CONTROL))
     "C-S-a" (p.B3G_A, (p.B3G_SHIFT, p.B3G_CONTROL))
+    "F1"    (p.B3G_F1, ())
+    "S-F1"  (p.B3G_F1, (p.B3G_SHIFT,))
   """
   # Direct lookup
   if key in KEY_MAP:
@@ -245,17 +248,19 @@ def _parseKey(key): # {{{0
         key = ord(key)
       else:
         raise VaueError("Failed to parse key: {!r} unknown".format(key))
+  # Special handling for uppercase Latin characters
   if key >= ord('A') and key <= ord('Z'):
-    return ord(chr(key).lower()), tuple(mods + [p.B3G_SHIFT])
+    mods.append(p.B3G_SHIFT)
+    return ord(chr(key).lower()), tuple(mods)
   return key, tuple(mods)
 # 0}}}
 
 class KeyPressManager(object): # {{{0
   """
-  Manages handling key presses for pybullet applications.
+  Manages handling key events for pybullet applications.
 
-  This class obtains key information on __enter__. The is<state> functions must
-  be called between __enter__ and __exit__. Example usage:
+  This class obtains key information on __enter__. The is<state> functions may
+  only be called between __enter__ and __exit__. Example usage:
 
   kpm = KeyPressManager()
   while mainLoop:
@@ -264,8 +269,13 @@ class KeyPressManager(object): # {{{0
       # Process custom key binds if desired:
       if kpm.isPressed(key):
         # Do stuff
+
+  beginRegion() and endRegion() can be used instead of __enter__ and __exit__.
   """
   def __init__(self, app, **kwargs): # {{{1
+    """Create a new KeyPressManager instance.
+    debug       Print debugging information (default False)
+    """
     self._app = app
     self._keys = None
     self._binds = []
@@ -279,25 +289,23 @@ class KeyPressManager(object): # {{{0
            repeat=False,
            modifiers=(),
            args=None, kwargs=None):
-    """Bind a key to a function
-    key
-      The key code to listen for
-    func
-      The function to call
-    timeout
-      Time in seconds to ignore the key
-    keys
-      If True, pass the key-press info as the first argument to func
-    on
-      Bit mask of the desired key states; only matching states will call func
-    repeat
-      Handle a key being held down continuously
-    modifiers
-      Modifier keys (B3G_SHIFT, B3G_CONTROL, etc) required
-    args
-      Extra positional args to pass to func
-    kwargs
-      Extra keyword arguments to pass to func
+    """Bind a key to a function. Arguments:
+    key         The key code to listen for; may be either a string or a code
+    func        The function to call
+    timeout     Time in seconds to ignore repeated key presses (default 0)
+    keys        Pass the keys dict as the first arg to func (default False)
+    on          Bit mask of required key states (default p.KEY_WAS_TRIGGERED)
+    repeat      Handle a key being held down continuously (default False)
+    modifiers   Tuple of required modifier keys (B3G_SHIFT, B3G_CONTROL, etc)
+    args        Extra positional args to pass to func
+    kwargs      Extra keyword arguments to pass to func
+
+    repeat=True is identical to `on = on | p.KEY_IS_DOWN`
+
+    If keys==True, then func will be called as
+      func(keys, *args, **kwargs)
+    Otherwise, func will be called as
+      func(*args, **kwargs)
     """
     fArgs = []
     fKwargs = {}
@@ -305,7 +313,7 @@ class KeyPressManager(object): # {{{0
       fArgs.extend(args)
     if kwargs is not None:
       fKwargs.update(kwargs)
-    keycode, keymods = _parseKey(key)
+    keycode, keymods = parseKey(key)
     kb = {
       "key": keycode,
       "func": func,
@@ -313,11 +321,12 @@ class KeyPressManager(object): # {{{0
       "timeout": timeout,
       "lastPress": 0,
       "wantKeyInfo": keys,
-      "modifiers": keymods + modifiers,
+      "modifiers": tuple(keymods) + tuple(modifiers),
       "extraArgs": fArgs,
       "extraKwargs": fKwargs
     }
     if self._debug:
+      # Print information about the keybind
       s = "Bound {} ".format(keycode)
       if kb["modifiers"]:
         s += "+".join(getKeyName(m) for m in kb["modifiers"]) + "+"
@@ -330,14 +339,16 @@ class KeyPressManager(object): # {{{0
       except AttributeError:
         fs = str(kb["func"])
       s += " to {}".format(fs)
-      ainfo = []
+      arginfo = []
       if kb["wantKeyInfo"]:
-        ainfo.append("keys")
+        arginfo.append("keys")
       if kb["extraArgs"]:
-        ainfo.extend(repr(arg) for arg in kb["extraArgs"])
+        for arg in kb["extraArgs"]:
+          arginfo.append(repr(arg))
       if kb["extraKwargs"]:
-        ainfo.extend("{!r}={!r}".format(k, v) for k, v in kb["extraKwargs"].items())
-      s += "({})".format(", ".join(ainfo))
+        for k, v in kb["extraKwargs"].items():
+          arginfo.append("{!r}={!r}".format(k, v))
+      s += "({})".format(", ".join(arginfo))
       logger.debug(s)
     self._binds.append(kb)
   # 1}}}
@@ -348,7 +359,7 @@ class KeyPressManager(object): # {{{0
       self.bind(k, func, *args, **kwargs)
   # 1}}}
 
-  def __enter__(self): # {{{1
+  def beginRegion(self): # {{{1
     "Start current round of key press handling"
     self._keys = p.getKeyboardEvents()
     # Handle keybinds
@@ -359,15 +370,27 @@ class KeyPressManager(object): # {{{0
         kb["lastPress"] = monotonic()
   # 1}}}
 
-  def __exit__(self, exc_type, exc_val, exc_tb): # {{{1
+  def endRegion(self): # {{{1
     "End current round of key press handling"
     self._keys = None
+  # 1}}}
+
+  def __enter__(self): # {{{1
+    "Start current round of key press handling"
+    self.beginRegion()
+  # 1}}}
+
+  def __exit__(self, exc_type, exc_val, exc_tb): # {{{1
+    "End current round of key press handling"
+    self.endRegion()
   # 1}}}
 
   @_verifyKeysAttr
   def _callBoundFunc(self, kb): # {{{1
     "Private: call the function defined in the keybind object"
-    wantKeys = kb["wantKeyInfo"] if kb["wantKeyInfo"] in (True, False) else False
+    wantKeys = False
+    if kb["wantKeyInfo"] in (True, False):
+      wantKeys = kb["wantKeyInfo"]
     func = kb["func"]
     funcArgs = [self._keys] if wantKeys else []
     funcKwargs = {}
@@ -443,6 +466,28 @@ class KeyPressManager(object): # {{{0
     "Return True if key was pressed and released in the same physics step"
     pass
   # 1}}}
+# 0}}}
+
+if __name__ == "__main__": # {{{0
+  # Tests
+  def printKey(key):
+    keydef = parseKey(key)
+    code = keydef[0]
+    mods = keydef[1] if len(keydef) == 2 else ()
+    s = "Key {0:10s} 0x{1:x}".format(repr(key), code)
+    s += " {0}".format(repr(unichr(code)).lstrip("u"))
+    for mod in mods:
+      s += ", 0x{0:x} {1}".format(mod, getKeyName(mod))
+    print(s)
+  p.connect(p.SHARED_MEMORY_SERVER, options="--verbose")
+  print("")
+  printKey("a")
+  printKey("A")
+  printKey("S-a")
+  printKey("S-M-a")
+  printKey("F1")
+  printKey("S-M-S-F1")
+  printKey("^Left")
 # 0}}}
 
 # vim: set ts=2 sts=2 sw=2 et:

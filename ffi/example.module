@@ -1,12 +1,14 @@
 
-# Example module
-# Build this module with the following command:
+# Example module. To use, perform the following:
+# 1. Remove "_disabled": True, line
+# 2. Build this module with the following command:
 #   python ffi/build.py ffi/example.module
-# Then, use the module as follows:
+# 3. Then, use the module as follows:
 #   from exmod import ffi as exmodffi, lib as exmodlib
 #   print(exmodlib.EXMOD_VALUE_1)
 
 {
+  "_disabled": True,
   "name": "exmod",
   "cdef": """
 const int EXMOD_VALUE_1;
