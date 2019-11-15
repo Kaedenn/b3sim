@@ -14,13 +14,11 @@ ffi:
 
 clean:
 	-rm $(patsubst %.py,%.pyc,$(PYFILES)) 2>/dev/null
-	-rm __pycache__/*.pyc
-	-rmdir __pycache__
+	if [ -d "__pycache__" ]; then rm __pycache__/*.pyc; rmdir __pycache__; fi
 	python $(FFI_BUILD) -a clean $(FFI_MODULES)
 
 distclean:
 	-rm $(patsubst %.py,%.pyc,$(PYFILES)) 2>/dev/null
-	-rm __pycache__/*.pyc
-	-rmdir __pycache__
+	if [ -d "__pycache__" ]; then rm __pycache__/*.pyc; rmdir __pycache__; fi
 	python $(FFI_BUILD) -a distclean $(FFI_MODULES)
 
