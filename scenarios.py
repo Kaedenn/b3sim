@@ -108,6 +108,8 @@ class ScenarioBase(object): # {{{0
 
 class EmptyPlaneScenario(ScenarioBase): # {{{0
   "Create an empty plane"
+  PLANE_THICKNESS = 0.1
+
   def __init__(self, name=None, **kwargs):
     super(EmptyPlaneScenario, self).__init__(_name(self, name), **kwargs)
 
@@ -118,7 +120,10 @@ class EmptyPlaneScenario(ScenarioBase): # {{{0
       tex = app.getArg("planeTexture")
     elif os.path.exists("data/white.png"):
       tex = "data/white.png"
-    objs.append(app.createPlane(app.worldFloor(), texture=tex))
+    t = EmptyPlaneScenario.PLANE_THICKNESS
+    pos = app.worldFloor() - V3(z=t)
+    exts = V3(app.worldSizeMax(), app.worldSizeMax(), t)
+    objs.append(app.createBox(mass=0, pos=pos, exts=exts, rgba=C4_WHT, texture=tex))
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -262,6 +267,7 @@ class ProjectileScenario(ScenarioBase): # {{{0
   SHAPE_SPHERE = 1
   SHAPE_BOX = 2
   SHAPE_CAPSULE = 3
+  SHAPE_CYLINDER = 4
 
   def __init__(self, name=None, **kwargs):
     super(ProjectileScenario, self).__init__(_name(self, name), **kwargs)
@@ -284,6 +290,8 @@ class ProjectileScenario(ScenarioBase): # {{{0
       s = app.createBox(mass=mass, exts=size * V3_XYZ, pos=spos)
     elif self._shape == ProjectileScenario.SHAPE_CAPSULE:
       s = app.createCapsule(mass=mass, pos=spos, radii=(size, size/4))
+    elif self._shape == ProjectileScenario.SHAPE_CYLINDER:
+      s = app.createCylinder(mass=mass, pos=spos, radii=(size, size/4))
     else:
       sys.stderr.write("Unknown shape {}; using spheres".format(self._shape))
       s = app.createSphere(mass, spos, radius=size)
@@ -307,21 +315,25 @@ class BallpitScenario(ScenarioBase): # {{{0
   """
   def __init__(self, name=None, **kwargs):
     super(BallpitScenario, self).__init__(_name(self, name), **kwargs)
+    self._shape = self.get("objShape", ProjectileScenario.SHAPE_SPHERE)
 
   def setup(self, app):
     objs = super(BallpitScenario, self).setup(app)
     mass = app.objectMass()
     rad = app.objectRadius()
     dx = app.numObjects() ** 0.5 / rad
-    xmin, xmax = -dx, dx
-    ymin, ymax = -dx, dx
-    zmin, zmax = -dx, dx
+    kws = {"restitution": 1}
     for i in range(app.numObjects()):
-      spos = V3(
-        random.uniform(xmin, xmax),
-        random.uniform(ymin, ymax),
-        random.uniform(zmin, zmax))
-      objs.append(app.createSphere(mass, spos, rad, restitution=1))
+      spos = randomVec(-dx, dx)
+      if self._shape == ProjectileScenario.SHAPE_SPHERE:
+        s = app.createSphere(mass=mass, pos=spos, radius=rad, **kws)
+      elif self._shape == ProjectileScenario.SHAPE_BOX:
+        s = app.createBox(mass=mass, pos=spos, exts=rad * V3_XYZ, **kws)
+      elif self._shape == ProjectileScenario.SHAPE_CAPSULE:
+        s = app.createCapsule(mass=mass, pos=spos, radii=(rad, rad*4), **kws)
+      elif self._shape == ProjectileScenario.SHAPE_CYLINDER:
+        s = app.createCylinder(mass=mass, pos=spos, radii=(rad, rad*4), **kws)
+      objs.append(s)
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -340,18 +352,19 @@ class BunnyScenario(ScenarioBase): # {{{0
     objs = super(BunnyScenario, self).setup(app)
     kwargs = {
       "pos": app.worldFloor() + V3(z=self.get("bunnyZ", 5, float)),
-      "orn": p.getQuaternionFromEuler([math.pi/2, 0, 0]),
+      "orn": p.getQuaternionFromEuler([math.pi/2, 0, math.pi/2]),
       "scale": self.get("bunnySize", 10, float),
-      "mass": self.get("bunnyMass", app.objectMass() * 10, float),
-      "margin": 0.5
+      "mass": self.get("bunnyMass", app.objectMass() * 100, float),
+      "margin": 1
     }
-    b1 = app.loadSoftBody("data/bunny.obj", **kwargs)
-    kwargs["pos"][2] += self.get("bunnyZ", 5, float)
-    kwargs["mass"] *= 3
-    kwargs["margin"] = 0.5
-    b2 = app.loadSoftBody("data/bunny.obj", **kwargs)
-    objs.extend((b1, b2))
-    app.setBodyTexture(b1, "data/white.png")
+    b = app.loadSoftBody("data/bunny.obj", **kwargs)
+    #b = app.loadSoftBody("sphere_smooth.obj", **kwargs)
+    objs.append(b)
+    kwargs["pos"][2] += kwargs["scale"] * 2 + 5;
+    kwargs["mass"] *= 10
+    b = app.createBox(mass=kwargs["mass"], pos=kwargs["pos"], exts=V3(10, 10, 1), rgba=withAlpha(C3_WHT, 0.5))
+    objs.append(b)
+    app.setBodyTexture(b, "data/white.png")
     return self._applyTransforms(app, objs)
 # 0}}}
 
@@ -364,7 +377,7 @@ class RandomUrdfScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(RandomUrdfScenario, self).setup(app)
-    size = 10 * self.get("urdfSize", 1, float)
+    size = app.getSlider("URDF Size")
     xmin, xmax = app.worldXMin(), app.worldXMax()
     ymin, ymax = app.worldYMin(), app.worldYMax()
     zmin, zmax = app.worldZMin(), app.worldZMax()
@@ -379,16 +392,20 @@ class RandomUrdfScenario(ScenarioBase): # {{{0
     return objs
 # 0}}}
 
-class RopeScenario(ScenarioBase): # {{{0
+class ChainScenario(ScenarioBase): # {{{0
   """
-  Add some objects suspended by ropes
+  Add what looks vaguely like a chain
   """
   def __init__(self, name=None, **kwargs):
-    super(RopeScenario, self).__init__(_name(self, name), **kwargs)
+    super(ChainScenario, self).__init__(_name(self, name), **kwargs)
 
   def setup(self, app):
-    objs = super(RopeScenario, self).setup(app)
-    anchor = app.createBox(mass=0, pos=5 * V3_Z, exts=V3(0.25, 0.25, 0.25))
+    objs = super(ChainScenario, self).setup(app)
+    #base = app.worldFloor() + something...
+    exts = app.objectRadius() * V3(1, 1, 1)
+    anchor = app.createBox(mass=0, pos=V3(), exts=exts)
     objs.append(anchor)
+    for i in range(app.numObjects()):
+      pass
     return objs
 # 0}}}

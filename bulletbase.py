@@ -230,12 +230,15 @@ class BulletAppBase(object):
     """
     Extra keyword arguments extracted from **kwargs:
       debug         enable some debug output (False)
+      plugins       tuple of paths or paths:suffixes plugins to load
       gravityX      default gravity for x (0) (between -20 and 20)
       gravityY      default gravity for y (0) (between -20 and 20)
       gravityZ      default gravity for z (-9.8) (between -20 and 20)
     """
     self._args = kwargs
     self._debug = getRemove(kwargs, "debug", False)
+    self._plugins = getRemove(kwargs, "plugins", ())
+    self._loadedPlugins = {}
     self._defaultGravity = {
       "x": getRemove(kwargs, "gravityX", 0, float),
       "y": getRemove(kwargs, "gravityY", 0, float),
@@ -298,6 +301,14 @@ class BulletAppBase(object):
     p.setInternalSimFlags(0)
     if pyb3.HAS_PYB3_DATA:
       p.setAdditionalSearchPath(pyb3.pybullet_data.getDataPath())
+
+    if self._plugins:
+      for plugin in self._plugins:
+        if ":" in plugin:
+          path, prefix = plugin.split(":", 1)
+        else:
+          path, prefix = plugin, ""
+        self._loadedPlugins[path] = p.loadPlugin(path, prefix)
 
     # Add standard debug config sliders
     self.addSlider("Gravity X", -20, 20, self._defaultGravity["x"])
@@ -669,7 +680,8 @@ class BulletAppBase(object):
   # Object creation:
 
   def createCollision(self, *args, **kwargs): # {{{1
-    "Create a collision shape, asserting success"
+    """Create a collision shape. All arguments are passed to pybullet
+    createCollisionShape."""
     cargs = _merge(self._createCollisionArgs[0], args)
     ckwargs = _merge(self._createCollisionArgs[1], kwargs)
     ret = p.createCollisionShape(*cargs, **ckwargs)
@@ -679,45 +691,42 @@ class BulletAppBase(object):
   # 1}}}
 
   def createMultiBody(self, *args, **kwargs): # {{{1
-    "Create a MultiBody, asserting success"
-    r = getRemove(kwargs, "restitution", 0, float)
-    color = None
-    if "color" in kwargs:
-      color = kwargs["color"]
-      del kwargs["color"]
-    elif "rgba" in kwargs:
-      color = kwargs["rgba"]
-      del kwargs["rgba"]
+    """Create a MultiBody.
+    Keyword arguments:
+      restitution   object restitution (0)
+      color         object color
+      rgba          object color (if "color" is not present)
+      texture       object texture filename
+    All other arguments are passed to pybullet createMultiBody.
+    """
+    restitution = getRemove(kwargs, "restitution", 0, float)
+    color = getRemove(kwargs, "color", None)
+    if color is None:
+      color = getRemove(kwargs, "rgba", None)
+    texture = getRemove(kwargs, "texture", None)
     bargs = _merge(self._createBodyArgs[0], args)
     bkwargs = _merge(self._createBodyArgs[1], kwargs)
-    b = assertSuccess(p.createMultiBody(*bargs, **bkwargs), "createMultiBody")
-    if r != 0:
-      p.changeDynamics(b, -1, restitution=r)
+    ret = p.createMultiBody(*bargs, **bkwargs)
+    assertSuccess(ret, "createMultiBody")
+    if restitution != 0:
+      p.changeDynamics(ret, -1, restitution=restitution)
     if color is not None:
-      self.setBodyColor(b, parseColor(color))
-    self._bodies.add(b)
-    return b
+      self.setBodyColor(ret, color)
+    if texture is not None:
+      self.setBodyTexture(ret, texture)
+    self._bodies.add(ret)
+    return ret
   # 1}}}
 
   def createVisualShape(self, *args, **kwargs): # {{{1
-    "Create a visual shape, asserting success"
-    color = None
-    if "color" in kwargs:
-      color = kwargs["color"]
-      del kwargs["color"]
-    if "rgba" in kwargs:
-      color = kwargs["rgba"]
-      del kwargs["rgba"]
-    if "texture" in kwargs:
-      kwargs["textureUniqueId"] = self.getTexture(kwargs["texture"])
-      del kwargs["texture"]
+    """Create a visual shape. All arguments are passed to pybullet
+    createVisualShae.
+    """
     vargs = _merge(self._createVisualShapeArgs[0], args)
     vkwargs = _merge(self._createVisualShapeArgs[1], kwargs)
     ret = p.createVisualShape(*vargs, **vkwargs)
     assertSuccess(ret, "createVisualShape")
     self._visualShapes.add(ret)
-    if color is not None:
-      self.setBodyColor(b, parseColor(color))
     return ret
   # 1}}}
 
@@ -729,49 +738,64 @@ class BulletAppBase(object):
     "Insert a new sphere into the world"
     if not (collider is None) ^ (radius is None):
       raise ValueError("Must pass either radius or collider")
-    elif collider is None:
-      cid = self.createCollision(p.GEOM_SPHERE, radius)
-    elif radius is None:
+    elif collider is not None:
       cid = collider
-    vid = -1 if visualShape is None else visualShape
+    elif radius is not None:
+      cid = self.createCollision(p.GEOM_SPHERE, radius)
+    vid = _or(visualShape, -1)
     return self.createMultiBody(mass, cid, vid, pos, **kwargs)
   # 1}}}
 
-  def createBox(self, mass, pos, exts, rgba=None, **kwargs): # {{{1
-    """
-    Create a box with the given half extents, at the given position, and
-    with the given color
-    """
+  def createBox(self, mass, pos, exts, **kwargs): # {{{1
+    "Insert a new box into the world"
     coll = self.createCollision(p.GEOM_BOX, halfExtents=exts)
     obj = self.createMultiBody(mass, coll, basePosition=pos, **kwargs)
-    if rgba is not None:
-      self.setBodyColor(obj, rgba)
     return obj
   # 1}}}
 
-  def createCapsule(self, mass, pos, radii=None, collider=None, # {{{1
-                    visualShape=None, **kwargs):
+  def createCapsule(self, mass, pos, # {{{1
+                    radii=None,
+                    collider=None,
+                    visualShape=None,
+                    **kwargs):
     "Insert a new capsule into the world"
-    if not (collider is None) ^ (radii is None or len(radii) != 2):
+    if not (collider is None) ^ (radii is None):
       raise ValueError("Must pass either radii or collider")
     elif collider is not None:
       cid = collider
     elif radii is not None:
       cid = self.createCollision(p.GEOM_CAPSULE, radius=radii[0], height=radii[1])
-    vid = -1 if visualShape is None else visualShape
+    vid = _or(visualShape, -1)
     return self.createMultiBody(mass, cid, vid, pos, **kwargs)
   # 1}}}
 
-  def createPlane(self, pos, texture=None, **kwargs): # {{{1
-    "Create a plane at the given position, optionally with a texture"
-    c = self.createCollision(p.GEOM_PLANE)
-    b = self.createMultiBody(0, c, basePosition=pos, **kwargs)
-    if texture is not None:
-      self.setBodyTexture(b, texture)
-    return b
+  def createCylinder(self, mass, pos, # {{{1
+                     radii=None,
+                     collider=None,
+                     visualShape=None,
+                     **kwargs):
+    "Insert a new cylinder into the world"
+    if not (collider is None) ^ (radii is None):
+      raise ValueError("Must pass either radii or collider")
+    elif collider is not None:
+      cid = collider
+    elif radii is not None:
+      cid = self.createCollision(p.GEOM_CYLINDER, radius=radii[0], height=radii[1])
+    vid = _or(visualShape, -1)
+    return self.createMultiBody(mass, cid, vid, pos, **kwargs)
   # 1}}}
 
-  def loadSoftBody(self, path, pos=None, orn=None, scale=None, mass=None, # {{{1
+  def createPlane(self, pos, **kwargs): # {{{1
+    "Create a plane at the given position"
+    cid = self.createCollision(p.GEOM_PLANE)
+    return self.createMultiBody(0, cid, basePosition=pos, **kwargs)
+  # 1}}}
+
+  def loadSoftBody(self, path, # {{{1
+                   pos=None,
+                   orn=None,
+                   scale=None,
+                   mass=None,
                    margin=None):
     "Load a soft body into the world"
     if not hasattr(p, "loadSoftBody"):
@@ -836,7 +860,10 @@ class BulletAppBase(object):
 
   def setBodyColor(self, idx, rgba, link=-1): # {{{1
     "Change a body's color to the given 3-tuple or 4-tuple"
-    color = list(rgba)
+    if isinstance(rgba, basestring):
+      color = parseColor(rgba)
+    else:
+      color = list(rgba)
     if len(color) == 3:
       color.append(1)
     p.changeVisualShape(idx, link, rgbaColor=color)
@@ -845,6 +872,10 @@ class BulletAppBase(object):
   def setBodyTexture(self, idx, path, link=-1): # {{{1
     "Change a body's texture to use the given texture file"
     p.changeVisualShape(idx, link, textureUniqueId=self.getTexture(path))
+  # 1}}}
+
+  def setBodyRestitution(self, idx, restitution, link=-1): # {{{1
+    p.changeDynamics(idx, link, restitution=restitution)
   # 1}}}
 
 # vim: set ts=2 sts=2 sw=2 et:

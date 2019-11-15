@@ -114,7 +114,6 @@ and will be saved to the current directory, presently {cwd}.
 
 Inputs are handled every {df} seconds ({fps} times per second). This includes
 keys, camera movement, GUI slider configuration, and GUI buttons.
-
 """.format(timings_path="/tmp/timings",
            cwd=os.getcwd(),
            df=INPUT_SLEEP,
@@ -181,47 +180,67 @@ class Simulation(BulletAppBase):
   def __init__(self, numObjects, *args, **kwargs): # {{{0
     """
     Positional arguments:
-      numObjects      number of objects (depends on scenario)
+      numObjects      object count (each scenario interprets this differently)
 
     Extra keyword arguments: (see BulletAppBase.__init__ for more)
       connectArgs     extra args to pass to pybullet.connect()
       worldSize       world scale (100)
       worldSizeMax    maximum world scale (1000)
-      objectRadius    radius for each object (0.5)
-      objectMass      mass for each object (5)
-      wallThickness   thickness of bounding-box walls (1.0)
-      brickWidth      width of each brick (5.0)
-      brickLength     length of each brick (1.0)
-      brickHeight     height of each brick (1.5)
-      brickDist       distance between bricks (5.0)
+      objectRadius    default object radius (0.5)
+      objectMass      default object mass (5)
+      planeTexture    texture for the world plane ("data/white.png")
+
+    Extra keyword arguments for populating objects (True/False):
+      walls           add walls
+      bricks (or b1)  add bricks scenario 1
+      b2              add bricks scenario 2: "stick tower"
+      b3              add bricks scenario 3: "reinforced"
+      projectile      add projectile scenario
+      pit             add "ball pit" scenario
+      bunny           add bunny scenario
+      urdfs           add random URDFs scenario
+      chain           add chain scenario (not yet implemented)
+
+    Arguments specific to the "walls" scenario:
+      wallThickness   bounding-box wall thickness (1.0)
+      wallAlpha       bounding-box wall opacity (0.1 or 10%)
+
+    Arguments specific to the "b1", "b2", and "b3" scenarios:
+      brickWidth      width half-extent of each brick (5.0)
+      brickLength     length half-extent of each brick (1.0)
+      brickHeight     height half-extent of each brick (1.5)
+      brickDist       distance between neighboring centers of mass (5.0)
       brickScale      brick scale factor (1.0)
-      numBrickLayers  height of brick tower, in number of bricks (20)
-      wallAlpha       default transparency of the box walls (0.1 or 10%)
+      numBrickLayers  number of layers used in the brick tower (20)
 
-    Extra keyword arguments for populating objects:
-      walls           add walls (False)
-      bricks          add bricks scenario 1 (alias for "b1")
-      b1              add bricks scenario 1 (False)
-      b2              add bricks scenario 2 (False)
-      b3              add bricks scenario 3 (False)
-      projectile      add projectile scenario (False)
-      pit             add "ball pit" scenario (False)
-      bunny           add bunny scenario (False)
+    Arguments specific to the "projectile" scenario:
+      projShape       1, 2, or 3 for Sphere, Box, or Capsule (1)
+      projSize        projectile radius (objectRadius / 2)
+      projSpeed       projectile base speed (20)
+      projMass        projectile base mass (100)
+      projTargetX     projectile target X (0)
+      projTargetY     projectile target Y (0)
+      projTargetZ     projectile target Z (0)
 
-    Scenario-specific keyword arguments:
-      bouncy          (various) set body resitution to 1 (False)
-      rand            (various) adjust body velocities by +/- 1% (False)
-      projShape       ("projectile") 1, 2, 3 for SPHERE, BOX, CAPSULE (1)
-      projSize        ("projectile") projectile size (objectRadius/2)
-      projSpeed       ("projectile") speed of the projectiles (100)
-      bunnyZ          ("bunny") height of the bunny off the floor (5)
-      bunnySize       ("bunny") size mult of the bunny (2)
-      bunnyMass       ("bunny") mass of the bunny (objectMass * 10)
-      urdfSize        ("urdfs") body size coefficient (5)
+    Arguments specific to the "bunny" scenario:
+      bunnyZ          height of the bunny off the floor (20)
+      bunnySize       size multiplier of the bunny (10)
+      bunnyMass       mass of the bunny (objectMass * 10)
+
+    Arguments applying to most scenarios:
+      bouncy          set all body resitutions to 1 (False)
+      rand            adjust all body velocities by +/- 1% (False)
     """
     super(Simulation, self).__init__(
         createBodyKwargs={"useMaximalCoordinates": True},
         *args, **kwargs)
+    if self._debug:
+      self.createSphere = pyb3.addLogging(self.createSphere)
+      self.createBox = pyb3.addLogging(self.createBox)
+      self.createCapsule = pyb3.addLogging(self.createCapsule)
+      self.createCylinder = pyb3.addLogging(self.createCylinder)
+      self.createPlane = pyb3.addLogging(self.createPlane)
+      self.setBodyColor = pyb3.addLogging(self.setBodyColor)
     self._n = numObjects
     self._ws = self.getArg("worldSize", 100, int)
     self._wsmax = self.getArg("worldSizeMax", 1000, int)
@@ -241,9 +260,9 @@ class Simulation(BulletAppBase):
     # Projectile configuration (used by self.fireProjectile)
     self.addSlider("Projectile Size", 1.0, 50.0, 2.5)
     self.addSlider("Projectile Mass", 5, 50, 25)
-    self.addSlider("Projectile Speed", 100, 1000, 100)
+    self.addSlider("Particle Speed", 100, 1000, 100)
     # Inputs for adding URDFs
-    self.addSlider("URDF Size", 1, 100, 20)
+    self.addSlider("URDF Size", 10, 1000, 100)
     self.addButtonEvent("Add Random URDF", self.addRandomUrdf)
     self.addButtonEvent("Load URDF", self.loadUrdf)
     # Input for removing most recently added object
@@ -378,24 +397,26 @@ class Simulation(BulletAppBase):
     scs = [EmptyPlaneScenario()]
     wantWalls = self.getArg("walls")
     wantBricks1 = self.getArg("bricks") or self.getArg("b1")
-    wantBricks2 = self.getArg("bricks2") or self.getArg("b2")
-    wantBricks3 = self.getArg("bricks3") or self.getArg("b3")
+    wantBricks2 = self.getArg("b2")
+    wantBricks3 = self.getArg("b3")
     wantProjectile = self.getArg("projectile")
     wantPit = self.getArg("pit")
     wantBunny = self.getArg("bunny")
     wantUrdfs = self.getArg("urdfs")
     wantRand = self.getArg("rand")
-    wantRope = self.getArg("rope")
+    wantChain = self.getArg("chain")
     if wantWalls:
       scs.append(BoxedScenario())
     if wantPit:
-      scs.append(BallpitScenario(rand=wantRand))
+      kws = {}
+      kws["objShape"] = self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int)
+      scs.append(BallpitScenario(rand=wantRand, **kws))
     if wantBricks1:
       scs.append(BrickTower1Scenario(rand=wantRand))
     if wantBricks2:
       scs.append(BrickTower2Scenario(rand=wantRand))
     if wantBricks3:
-      scs.append(BrickTower3Scenario())
+      scs.append(BrickTower3Scenario(rand=wantRand))
     if wantProjectile:
       kws = {}
       kws["projShape"] = self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int)
@@ -414,8 +435,8 @@ class Simulation(BulletAppBase):
       scs.append(BunnyScenario(**kws))
     if wantUrdfs:
       scs.append(RandomUrdfScenario())
-    if wantRope:
-      scs.append(RopeScenario())
+    if wantChain:
+      scs.append(ChainScenario())
 
     # Add all of the objects from all of the scenarios configured
     for sc in scs:
@@ -429,11 +450,12 @@ class Simulation(BulletAppBase):
 
     # Handle --urdf argument: add URDF at a random position between (-0.5, 0.5)
     for path in self.getArg("urdf", (), tuple):
-      logger.debug("Adding URDF {}".format(path))
-      pos = V3(random.random() - 0.5, random.random() - 0.5, random.random() - 0.5)
+      pos = randomVec()
+      logger.debug("Adding URDF {} at {}".format(path, pos))
       self._bodies.add(self.loadURDF(path, basePosition=pos))
 
-    logger.debug("Added {} bodies from {} scenarios".format(len(self._bodies), len(scs)))
+    nb, ns = len(self._bodies), len(scs)
+    logger.debug("Added {} bodies from {} scenarios".format(nb, ns))
 
     # Add non-body items
     if self.getArg("axes") or self._debug:
@@ -450,24 +472,25 @@ class Simulation(BulletAppBase):
     self._bodies.add(self.createSphere(m, V3(0, 0, z), radius=r))
   # 0}}}
 
-  def fireProjectile(self, sadj=1, madj=0, vadj=0, padj=None, dadj=None): # {{{0
+  def fireProjectile(self, **kwargs): # {{{0
     """Fire a projectile in the direction the camera is facing
-    sadj: Size adjust; coefficient
-    madj: Mass adjust; added to mass
-    vadj: Speed adjust; added to speed
-    padj: Position adjust; added to position
-    dadj: Velocity adjust; added to velocity
+
+    size: Projectile size; defaults to self.getSlider("Projectile Size")
+    mass: Projectile mass; defaults to self.getSlider("Projectile Mass")
+    vel: Projectile velocity (vector)
+    pos: Projectile starting position (vector)
+
+    Projectile velocity defaults at self.getSlider("Particle Speed") and in the
+    direction the camera is facing.
     """
-    size = self.getSlider("Projectile Size") * sadj
-    mass = self.getSlider("Projectile Mass") + madj
-    speed = self.getSlider("Projectile Speed") + vadj
     ci = self.getCamera()
-    pos = self.getCameraPos() + ci["camForward"]
-    if padj is not None:
-      pos += padj
-    vel = ci["camForward"] * speed
-    if dadj is not None:
-      vel += dadj
+    size = kwargs.get("size", self.getSlider("Projectile Size"))
+    mass = kwargs.get("mass", self.getSlider("Projectile Mass"))
+    if "vel" in kwargs:
+      vel = kwargs["vel"]
+    else:
+      vel = ci["camForward"] * self.getSlider("Particle Speed")
+    pos = kwargs.get("pos", self.getCameraPos())
     logger.debug("Creating projectile m={}, p={}, r={}".format(mass, pos, size))
     s = self.createSphere(mass, pos, radius=size)
     p.resetBaseVelocity(s, linearVelocity=vel)
@@ -526,13 +549,6 @@ class Simulation(BulletAppBase):
 
 def onMovementKey(app, keys): # {{{0
   "Handle pressing one of the movement keys"
-  def getDir(negKey, posKey): # {{{1
-    "Determine if we go positive or negative"
-    if isPressed(keys, negKey):
-      return -1 
-    elif isPressed(keys, posKey):
-      return 1
-    return 0 # 1}}}
   # Rules that define what keys do what
   movementRules = { # {{{1
     CAM_AXIS_PITCH: {
@@ -574,7 +590,16 @@ def onMovementKey(app, keys): # {{{0
       "enableFast": True
     },
   } # 1}}}
-  # Calculate desired movement
+
+  def getDir(negKey, posKey): # {{{1
+    "Determine if we go positive or negative"
+    if isPressed(keys, negKey):
+      return -1 
+    elif isPressed(keys, posKey):
+      return 1
+    return 0 # 1}}}
+
+  # Handle generic movement keys
   movement = {}
   for axis, rules in movementRules.items():
     if rules["enable"]:
@@ -583,6 +608,7 @@ def onMovementKey(app, keys): # {{{0
         dv *= KEY_FAST_MULT
       movement[axis] = dv
   app.moveCamera(**movement)
+  # Special movement keys
   if isPressed(keys, p.B3G_KP_5):
     if isPressed(keys, p.B3G_SHIFT):
       # S-NUMPAD_5 resets the camera to the starting position and orientation
@@ -634,7 +660,7 @@ class SimulationDriver(object):
       if crgba is not None:
         cr, cg, cb = crgba[0], crgba[1], crgba[2]
       else:
-        logger.error("Failed parsing --bg {!r}; ignoring".format(self.args.bg))
+        logger.error("Ignoring invalid --bg value {!r}".format(self.args.bg))
 
     # Determine the arguments to pass to pybullet.connect
     simArgs = []
@@ -697,6 +723,8 @@ class SimulationDriver(object):
       if "urdf" not in extraKwargs:
         extraKwargs["urdf"] = []
       extraKwargs["urdf"].extend(urdfs)
+    if self.args.plugin:
+      extraKwargs["plugins"] = self.args.plugin
     # Gather engine parameters
     eargs = {}
     if self.args.split_impulse:
@@ -735,13 +763,15 @@ class SimulationDriver(object):
   def _setupKeyBinds(self): # {{{0
     "Create the keypress manager and register keypress events"
     kbm = KeyPressManager(self.app, debug=self.args.debug)
+    kbm.map("!", "S-1")
+    kbm.map("?", "S-/")
     onMove = lambda keys: onMovementKey(self.app, keys)
     for key in KEY_CLASS_ARROWS + KEY_CLASS_NUMPAD:
       kbm.bind(key, onMove, keys=True, repeat=True)
     kbm.bind(" ", self._onKeyReset)
     kbm.bind("h", self._onKeyHelp)
     kbm.bind("b", self._onKeyDump)
-    kbm.bind("S-/", self._onKeyStatus)
+    kbm.bind("?", self._onKeyStatus)
     kbm.bind(".", self._onKeyStep, repeat=True)
     kbm.bind("m", self._onKeyToggleMousePicking)
     kbm.bind("`", self._onKeyToggleKeyEvents)
@@ -857,7 +887,7 @@ Camera up: {camUp}
 Camera forward: {camForward}
 View Matrix:
 {viewMat}
-Proj Matrix:
+Projection Matrix:
 {projMat}
 """.format(width=ci["width"],
            height=ci["height"],
@@ -898,18 +928,26 @@ Proj Matrix:
 
   def _onKeyFireProjectile(self, keys=()): # {{{0
     "Callback: fire projectile(s) in the direction the camera is facing"
+    ci = self.app.getCamera()
+    cpos = self.app.getCameraPos()
+    posStart = cpos + 8 * ci["camForward"]
+    vz = ci["camUp"]
+    vy = ci["camForward"]
+    vx = np.cross(vy, vz)
     if p.B3G_SHIFT in keys:
+      psize = self.app.getSlider("Projectile Size") * 0.5
       dxs = (
-        V3(-1, 0, -1), V3(0, 0, -1), V3(1, 0, -1),
-        V3(-1, 0, 0), V3(0, 0, 0), V3(1, 0, 0),
-        V3(-1, 0, 1), V3(0, 0, 1), V3(1, 0, 1)
+        V3(-1,  0, -1), V3( 0,  0, -1), V3( 1,  0, -1),
+        V3(-1,  0,  0), V3( 0,  0,  0), V3( 1,  0,  0),
+        V3(-1,  0,  1), V3( 0,  0,  1), V3( 1,  0,  1)
       )
       for dx in dxs:
+        vec = 2 * psize * (vx * dx[0] + vy * dx[1] + vz * dx[2])
         self.app.setRealTime(False)
-        self.app.fireProjectile(sadj=0.5, vadj=8, padj=dx*0.1, dadj=dx)
+        self.app.fireProjectile(size=psize, pos=posStart + vec)
         self.app.setRealTime(True)
     else:
-      self.app.fireProjectile()
+      self.app.fireProjectile(pos=posStart)
   # 0}}}
 
   def _onKeyVideoLogging(self): # {{{0
@@ -932,11 +970,21 @@ def parseArgs(): # {{{0
       usage="%(prog)s [options] [pybullet-options]",
       add_help=False,
       epilog="""
-All unhandled arguments are passed to pybullet as-is. The -c argument can be
-used more than once. For --cam, "Df" means "default value". Passing --noloop
-will prevent some keybinds (pause, reset) from working. All options after --
-will be ignored and passed to pybullet as-is. The default background color is
-hard-coded in the ExampleBrowser as r=150, g=170, b=170.""",
+Important notes:
+* All options after -- will be ignored and passed to pybullet as-is.
+* All unhandled arguments are passed to pybullet as-is.
+* The -c argument can be used more than once.
+* For --cam, "Df" means "default value". Use --help-keys to display what those
+  values are.
+* The default background color is hard-coded in the ExampleBrowser as RGB
+  150,170,170, or #96aaaa.
+* Passing --noloop will prevent custom keybinds (pause, reset) from working.
+  GUI inputs (sliders, buttons) will also not work. --noloop is implied if the
+  interpreter is started in interactive mode using "python -i".
+* Bullet plugins can be loaded using --plugin "path:suffix". Custom code is
+  needed for calling plugin commands.
+* Because the client and server run at different framerates, image/video
+  dumping may skip frames.""",
       formatter_class=ArgumentDefaultsHelpFormatter)
   ap.add_argument("-h", "--help", action="store_true",
                   help="show this message and exit")
@@ -995,11 +1043,13 @@ hard-coded in the ExampleBrowser as r=150, g=170, b=170.""",
   ap.add_argument("--load", metavar="PATH",
                   help="load .bullet file before starting the simulation")
   ap.add_argument("--mp4", metavar="PATH",
-                  help="path to mp4 file (F12 to start/stop rendering)")
+                  help="path to mp4 file (press F12 to start/stop rendering)")
+  ap.add_argument("--plugin", metavar="PATH", action="append",
+                  help="load shared object as a Bullet plugin")
   ap.add_argument("--debug", action="store_true",
                   help="enable diagnostic (debugging) output")
   ap.add_argument("--trace", action="store_true",
-                  help="enable tracing of various pybullet APIs")
+                  help="enable tracing of numerous pybullet APIs")
 
   # Add experimental arguments
   pg = ap.add_argument_group("experimental arguments")
@@ -1017,8 +1067,9 @@ hard-coded in the ExampleBrowser as r=150, g=170, b=170.""",
   # Make a copy of sys.argv for pre-processing
   argv = sys.argv[1:]
 
-  # Arguments not parsed by argparse
+  # For storing arguments not parsed by argparse
   remainder = []
+
   # Extract arguments after --
   if "--" in argv:
     idx = argv.index("--")
@@ -1054,6 +1105,7 @@ hard-coded in the ExampleBrowser as r=150, g=170, b=170.""",
   # Enable debugging/verbose mode if requested
   if args.debug:
     logger.setLevel(logging.DEBUG)
+    # --debug implies passing --verbose to pybullet
     if "--verbose" not in remainder:
       remainder.append("--verbose")
 
@@ -1070,11 +1122,12 @@ if __name__ == "__main__": # {{{0
   # Parse sys.argv
   args, remainder = parseArgs()
 
-  # Add debugging if desired
+  # Add debugging to a good number of APIs, if enabled
   if args.trace:
     p.addUserDebugLine = pyb3.addLogging(p.addUserDebugLine)
     p.addUserDebugParameter = pyb3.addLogging(p.addUserDebugParameter)
     p.changeDynamics = pyb3.addLogging(p.changeDynamics)
+    p.changeVisualShape = pyb3.addLogging(p.changeVisualShape)
     p.configureDebugVisualizer = pyb3.addLogging(p.configureDebugVisualizer)
     p.connect = pyb3.addLogging(p.connect)
     p.createCollisionShape = pyb3.addLogging(p.createCollisionShape)
@@ -1086,6 +1139,7 @@ if __name__ == "__main__": # {{{0
     p.getDebugVisualizerCamera = pyb3.addLogging(p.getDebugVisualizerCamera)
     p.getDynamicsInfo = pyb3.addLogging(p.getDynamicsInfo)
     p.getVisualShapeData = pyb3.addLogging(p.getVisualShapeData)
+    p.loadPlugin = pyb3.addLogging(p.loadPlugin)
     p.loadSoftBody = pyb3.addLogging(p.loadSoftBody)
     p.loadTexture = pyb3.addLogging(p.loadTexture)
     p.loadURDF = pyb3.addLogging(p.loadURDF)
