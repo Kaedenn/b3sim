@@ -50,6 +50,8 @@ class ArgumentDefaultsHelpFormatter(argparse.HelpFormatter):
         if action.option_strings or action.nargs in defaulting_nargs:
           help += ' (default: %(default)s)'
     return help
+  def _fill_text(self, text, width, indent):
+    return "".join([indent + line for line in text.splitlines(True)])
 # 0}}}
 
 # Color constants {{{0
@@ -81,17 +83,20 @@ C_NONE = [0, 0, 0, 0]
 # 0}}}
 
 def parseColor(c, cmax=256, scale=1, forceAlpha=None): # {{{0
-  """Parse a color c between 0 and cmax.
-  Understood formats:
-    "#rrggbb"
-    "#rrggbbaa"
-    "rr,gg,bb"
-    "rr,gg,bb,aa"
-    (r, g, b) or [r, g, b]
-    (r, g, b, a) or [r, g, b, a]
-  If forceAlpha is not None, then alpha component is ignored and the value for
-  forceAlpha is used instead.
-  Return value is a 4-tuple of floats between 0 and scale.
+  """Parse a color 0 <= c < cmax and rescale to 0 <= c < scale
+
+  Understood inputs:
+    string "#rrggbb"
+    string "#rrggbbaa"
+    string "rr,gg,bb"
+    string "rr,gg,bb,aa"
+    3-sequence (r, g, b) (can be any iterable such that len(i) == 3)
+    4-sequence (r, g, b, a) (can be any iterable such that len(i) == 4)
+
+  If forceAlpha is supplied, then the existing alpha component is discarded
+  and forceAlpha used instead.
+
+  Returns a 4-tuple of floats c such that 0 <= c < scale.
   """
   r = g = b = a = float(cmax)
   if isinstance(c, basestring):
@@ -214,8 +219,9 @@ CAM_AXIS_VECTORS = {
 # 0}}}
 
 def parseCameraSpec(spec, dfp, dfy, dfd, dft): # {{{0
-  """Parse a comma-separated string of values as a camera position and
-  orientation"""
+  """
+  Parse a comma-separated string of values as a camera position and orientation
+  """
   t = spec.split(",")
   pitch, yaw, dist, target = dfp, dfy, dfd, dft
   def getTok(idx, tp, dflt):
@@ -278,7 +284,7 @@ def assertSuccess(val, msg): # {{{0
 # 0}}}
 
 def getRemove(d, key, dflt=None, typeObj=None): # {{{0
-  "remove a key from a dict and return its value, optionally applying a type"
+  "Remove a key from a dict and return its value, optionally applying a type"
   if key in d:
     val = d[key]
     del d[key]
@@ -319,7 +325,7 @@ def openFileDialog(title=None, globs=(), multiple=False): # {{{0
 # 0}}}
 
 def centerString(s, width=80, ch=" ", padSpace=False): # {{{0
-  """Center a string using ch.
+  """Pad a string to center it within a given width.
   s         The string to center
   width     The desired with of the resulting string (default: 80)
   ch        The padding character (default: space)
