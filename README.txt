@@ -1,5 +1,5 @@
 
-Physics Simulation Using pybullet
+Physics Simulation Using PyBullet
 
 == DOWNLOADING AND INSTALLING BULLET ==
 

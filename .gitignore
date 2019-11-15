@@ -15,6 +15,7 @@ __pycache__/
 ffi/*.c
 ffi/*.o
 
-# Holding directories
+# Untracked content
+REFERENCE.txt
 renders/
 old/
