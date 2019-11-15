@@ -58,7 +58,9 @@ The following special keys are understood:
 # TODO: Advanced compositions
 # "!" -> "S-1"
 # "@" -> "S-2"
+# "?" -> "S-/"
 # etc...
+# Detect keyboard layout and apply the compositions accordingly
 
 import functools
 import os
@@ -278,6 +280,7 @@ class KeyPressManager(object): # {{{0
     """
     self._app = app
     self._keys = None
+    self._maps = {}
     self._binds = []
     self._debug = kwargs.get("debug", False)
   # 1}}}
@@ -313,6 +316,8 @@ class KeyPressManager(object): # {{{0
       fArgs.extend(args)
     if kwargs is not None:
       fKwargs.update(kwargs)
+    if key in self._maps:
+      key = self._maps[key]
     keycode, keymods = parseKey(key)
     kb = {
       "key": keycode,
@@ -327,29 +332,7 @@ class KeyPressManager(object): # {{{0
     }
     if self._debug:
       # Print information about the keybind
-      s = "Bound {} ".format(keycode)
-      if kb["modifiers"]:
-        s += "+".join(getKeyName(m) for m in kb["modifiers"]) + "+"
-      s += getKeyName(kb["key"])
-      s += " on {}".format(getKeyStateString(kb["states"]))
-      if kb["timeout"]:
-        s += " timeout {}".format(kb["timeout"])
-      try:
-        fs = str(kb["func"].__name__)
-      except AttributeError:
-        fs = str(kb["func"])
-      s += " to {}".format(fs)
-      arginfo = []
-      if kb["wantKeyInfo"]:
-        arginfo.append("keys")
-      if kb["extraArgs"]:
-        for arg in kb["extraArgs"]:
-          arginfo.append(repr(arg))
-      if kb["extraKwargs"]:
-        for k, v in kb["extraKwargs"].items():
-          arginfo.append("{!r}={!r}".format(k, v))
-      s += "({})".format(", ".join(arginfo))
-      logger.debug(s)
+      logger.debug("Bound {}".format(self.kbToString(kb)))
     self._binds.append(kb)
   # 1}}}
 
@@ -357,6 +340,39 @@ class KeyPressManager(object): # {{{0
     "Bind a list/tuple of keys to a function (see self.bind)"
     for k in keys:
       self.bind(k, func, *args, **kwargs)
+  # 1}}}
+
+  def kbToString(self, kb): # {{{1
+    "Convert a kb dict to a string"
+    s = "{} ".format(kb["key"])
+    if kb["modifiers"]:
+      s += "+".join(getKeyName(m) for m in kb["modifiers"]) + "+"
+    s += getKeyName(kb["key"])
+    s += " on {}".format(getKeyStateString(kb["states"]))
+    if kb["timeout"]:
+      s += " timeout {}".format(kb["timeout"])
+    try:
+      fs = str(kb["func"].__name__)
+    except AttributeError:
+      fs = str(kb["func"])
+    s += " to {}".format(fs)
+    arginfo = []
+    if kb["wantKeyInfo"]:
+      arginfo.append("keys")
+    if kb["extraArgs"]:
+      for arg in kb["extraArgs"]:
+        arginfo.append(repr(arg))
+    if kb["extraKwargs"]:
+      for k, v in kb["extraKwargs"].items():
+        arginfo.append("{!r}={!r}".format(k, v))
+    s += "({})".format(", ".join(arginfo))
+    return s
+  # 1}}}
+
+  def map(self, sym, key): # {{{1
+    """Map symbol sym to a key sequence such that binding to sym actually
+    binds to key"""
+    self._maps[sym] = key
   # 1}}}
 
   def beginRegion(self): # {{{1
@@ -383,6 +399,13 @@ class KeyPressManager(object): # {{{0
   def __exit__(self, exc_type, exc_val, exc_tb): # {{{1
     "End current round of key press handling"
     self.endRegion()
+  # 1}}}
+
+  def getBinds(self, func=None): # {{{1
+    "Obtain all key binds, optionally limiting to binds for func"
+    if func:
+      return [kb for kb in self._binds if kb["func"] == func]
+    return self._binds
   # 1}}}
 
   @_verifyKeysAttr
