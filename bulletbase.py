@@ -230,7 +230,7 @@ class BulletAppBase(object):
     """
     Extra keyword arguments extracted from **kwargs:
       debug         enable some debug output (False)
-      plugins       tuple of paths or paths:suffixes plugins to load
+      plugins       tuple of plugin paths or paths:suffixes to load
       gravityX      default gravity for x (0) (between -20 and 20)
       gravityY      default gravity for y (0) (between -20 and 20)
       gravityZ      default gravity for z (-9.8) (between -20 and 20)
@@ -631,17 +631,21 @@ class BulletAppBase(object):
     return np.array(vel[0]), np.array(vel[1])
   # 1}}}
 
-  def getBodyCollision(self, oid, link=-1): # {{{1
+  def getBodyCollision(self, oid, link=-1, failSoft=False): # {{{1
     "Return information on the body's collider"
     colliders = []
-    for entry in p.getCollisionShapeData(oid, link):
-      colliders.append({
-        "geomType": entry[2],
-        "dimensions": np.array(entry[3]),
-        "meshFileName": entry[4],
-        "localFramePosition": np.array(entry[5]),
-        "localFrameOrientation": np.array(entry[6]),
-      })
+    try:
+      for entry in p.getCollisionShapeData(oid, link):
+        colliders.append({
+          "geomType": entry[2],
+          "dimensions": np.array(entry[3]),
+          "meshFileName": entry[4],
+          "localFramePosition": np.array(entry[5]),
+          "localFrameOrientation": np.array(entry[6]),
+        })
+    except p.error as e:
+      if not failSoft:
+        raise
     return colliders
   # 1}}}
 
@@ -660,13 +664,13 @@ class BulletAppBase(object):
     return shapes
   # 1}}}
 
-  def getFullObjectInfo(self, oid): # {{{1
+  def getFullObjectInfo(self, oid, link=-1, failSoft=False): # {{{1
     "Return everything known about the object"
     bi = {}
-    bi.update(self.getBodyDynamics(oid))
+    bi.update(self.getBodyDynamics(oid, link))
     bi["AABB"] = self.getAABB(oid)
     bi["linearVelocity"], bi["angularVelocity"] = self.getBodyVelocity(oid)
-    bi["collisionData"] = self.getBodyCollision(oid)
+    bi["collisionData"] = self.getBodyCollision(oid, link, failSoft)
     bi["visualShapeData"] = self.getBodyShapes(oid)
     return bi
   # 1}}}
