@@ -153,6 +153,11 @@ def V3(x=0, y=0, z=0): # {{{0
   return np.array((x, y, z))
 # 0}}}
 
+def V4(x=0, y=0, z=0, w=0): # {{{0
+  "Create a 4-dimensional vector"
+  return np.array((x, y, z, w))
+# 0}}}
+
 def randomVec(low=-0.5, high=0.5): # {{{0
   "Create a vector with each component having a random value"
   return V3(
