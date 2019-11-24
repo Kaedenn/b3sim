@@ -19,3 +19,5 @@ ffi/*.o
 REFERENCE.txt
 renders/
 old/
+data/3rdparty/
+data/pybullet_*
