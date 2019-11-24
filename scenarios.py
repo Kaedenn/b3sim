@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
 """
-Various simulation scenarios. More than one scenario can be applied at once.
+Various simulation scenarios. Multiple scenarios can be applied at once.
 """
 
 import math
@@ -263,6 +263,20 @@ class BrickTower3Scenario(ScenarioBase): # {{{0
 class ProjectileScenario(ScenarioBase): # {{{0
   """
   Fire projectiles at the origin
+
+  velCoeff: velocity coefficient (20)
+  projShape: shape ID (see table below)
+  projMass: projectile mass (100)
+  projTargetX: projectile target x (0)
+  projTargetY: projectile target y (0)
+  projTargetZ: projectile target z (0)
+  projSize: proectile size (objectRadius()/2)
+
+  Shape IDs:
+    1   Sphere
+    2   Box
+    3   Capsule
+    4   Cylinder
   """
   SHAPE_SPHERE = 1
   SHAPE_BOX = 2
@@ -312,6 +326,8 @@ class ProjectileScenario(ScenarioBase): # {{{0
 class BallpitScenario(ScenarioBase): # {{{0
   """
   Create what looks like a ball pit
+
+  objShape: shape ID (see ProjectileScenario)
   """
   def __init__(self, name=None, **kwargs):
     super(BallpitScenario, self).__init__(_name(self, name), **kwargs)
@@ -352,13 +368,12 @@ class BunnyScenario(ScenarioBase): # {{{0
     objs = super(BunnyScenario, self).setup(app)
     kwargs = {
       "pos": app.worldFloor() + V3(z=self.get("bunnyZ", 5, float)),
-      "orn": p.getQuaternionFromEuler([math.pi/2, 0, math.pi/2]),
+      "orn": p.getQuaternionFromEuler((math.pi/2, 0, math.pi/2)),
       "scale": self.get("bunnySize", 10, float),
       "mass": self.get("bunnyMass", app.objectMass() * 100, float),
-      "margin": 1
+      "margin": 0.5
     }
     b = app.loadSoftBody("data/bunny.obj", **kwargs)
-    #b = app.loadSoftBody("sphere_smooth.obj", **kwargs)
     objs.append(b)
     kwargs["pos"][2] += kwargs["scale"] * 2 + 5;
     kwargs["mass"] *= 10
