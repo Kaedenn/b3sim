@@ -420,7 +420,7 @@ class Simulation(BulletAppBase):
     if wantProjectile:
       kws = {}
       kws["projShape"] = self.getArg("projShape", ProjectileScenario.SHAPE_SPHERE, int)
-      kws["projSize"] = self.getArg("projSize", self.objectRadius()/2, float)
+      kws["projSize"] = self.getArg("projSize", self.objectRadius(), float)
       kws["velCoeff"] = self.getArg("projSpeed", 20, float)
       kws["projMass"] = self.getArg("projMass", 100, float)
       kws["projTargetX"] = self.getArg("projTargetX", 0, float)
@@ -452,7 +452,34 @@ class Simulation(BulletAppBase):
     for path in self.getArg("urdf", (), tuple):
       pos = randomVec()
       logger.debug("Adding URDF {} at {}".format(path, pos))
-      self._bodies.add(self.loadURDF(path, basePosition=pos))
+      self.loadURDF(path, basePosition=pos)
+
+    # Handle --sb argument: add soft bodies
+    for spec in self.getArg("softBodies", (), tuple):
+      parts = spec.split(":")
+      path = parts[0]
+      scale = float(parts[1]) if len(parts) > 1 else 1
+      margin = float(parts[2]) if len(parts) > 2 else 1
+      pos = V3()
+      orn = p.getQuaternionFromEuler((0, math.pi/2, 0))
+      logger.debug("Adding soft body {} at {}".format(path, pos))
+      self.loadSoftBody(path, pos=pos, scale=scale, mass=100, orn=orn, margin=margin)
+
+    # Handle --rb argument: add rigid bodies
+    for spec in self.getArg("rigidBodies", (), tuple):
+      parts = spec.split(":")
+      path = parts[0]
+      scale = float(parts[1]) if len(parts) > 1 else 1
+      logger.debug("Creating collision {}, scale={}".format(path, scale))
+      coll = self.createCollision(p.GEOM_MESH, fileName=path, meshScale=scale)
+      kws = {
+        "baseMass": 100,
+        "baseCollisionShapeIndex": coll,
+        "baseVisualShapeIndex": -1,
+        "basePosition": V3()
+      }
+      logger.debug("Creating multibody {}".format(kws))
+      self.createMultiBody(**kws)
 
     nb, ns = len(self._bodies), len(scs)
     logger.debug("Added {} bodies from {} scenarios".format(nb, ns))
@@ -630,11 +657,17 @@ class SimulationDriver(object):
     self.remainder = remainder
     self.export = None
 
+    # Camera configuration
+    cstart = (CAM_START_PITCH, CAM_START_YAW, CAM_START_DIST, CAM_START_TARGET)
+    ci = parseCameraSpec(args.cam, *cstart)
+
+    # Gather configuration and construct the simulation
     app_args = self._gatherSimArgs()
     self.app = Simulation(args.num, **app_args)
-    self.app.setCamera(**self._parseCameraArg(args.cam))
+    self.app.setCamera(pitch=ci[0], yaw=ci[1], distance=ci[2], target=ci[3])
     self.app.reset()
 
+    # Hide the preview windows as they're not used in pybullet
     self.app.toggleCov(p.COV_ENABLE_RGB_BUFFER_PREVIEW, False)
     self.app.toggleCov(p.COV_ENABLE_DEPTH_BUFFER_PREVIEW, False)
     self.app.toggleCov(p.COV_ENABLE_SEGMENTATION_MARK_PREVIEW, False)
@@ -723,6 +756,10 @@ class SimulationDriver(object):
       if "urdf" not in extraKwargs:
         extraKwargs["urdf"] = []
       extraKwargs["urdf"].extend(urdfs)
+    if self.args.sb:
+      extraKwargs["softBodies"] = self.args.sb
+    if self.args.rb:
+      extraKwargs["rigidBodies"] = self.args.rb
     if self.args.plugin:
       extraKwargs["plugins"] = self.args.plugin
     # Gather engine parameters
@@ -739,19 +776,19 @@ class SimulationDriver(object):
       eargs["frictionERP"] = self.args.friction_erp
     if eargs:
       extraKwargs["engineParams"] = eargs
+    # Print configuration for debugging
+    if self.args.debug:
+      connArgs = extraKwargs.get("connectArgs", ())
+      camArgs = ("cdp", "cdy", "cdd", "cdtx", "cdty", "cdtz")
+      print("Engine arguments: {}".format(" ".join(connArgs)))
+      print("Simulation arguments:")
+      for key in camArgs:
+        if key in extraKwargs:
+          print("  Camera step {}: {}".format(key[2:], extraKwargs[key]))
+      for key in sorted(extraKwargs):
+        if key not in camArgs and key not in ("debug", "connectArgs"):
+          print("  {}: {!r}".format(key, extraKwargs[key]))
     return extraKwargs
-  # 0}}}
-
-  def _parseCameraArg(self, arg): # {{{0
-    "Parse the --cam argument"
-    cstart = (CAM_START_PITCH, CAM_START_YAW, CAM_START_DIST, CAM_START_TARGET)
-    cinfo = parseCameraSpec(arg, *cstart)
-    return {
-      "pitch": cinfo[0],
-      "yaw": cinfo[1],
-      "distance": cinfo[2],
-      "target": cinfo[3]
-    }
   # 0}}}
 
   def _getVideoPath(self): # {{{0
@@ -763,6 +800,7 @@ class SimulationDriver(object):
   def _setupKeyBinds(self): # {{{0
     "Create the keypress manager and register keypress events"
     kbm = KeyPressManager(self.app, debug=self.args.debug)
+    # TODO: Detect these and others using X11
     kbm.map("!", "S-1")
     kbm.map("?", "S-/")
     onMove = lambda keys: onMovementKey(self.app, keys)
@@ -844,6 +882,13 @@ class SimulationDriver(object):
       bid = p.getBodyUniqueId(bnr)
       print("Body #{} ID={}:".format(bnr, bid))
       try:
+        oi = self.app.getFullObjectInfo(bid, failSoft=True)
+        print("  Full info:")
+        for k,v in oi.items():
+          print("    {!r} = {!r}".format(k, v))
+      except p.error as e:
+        logger.exception(e)
+      try:
         bd = self.app.getBodyDynamics(bid)
         p1, p2 = self.app.getAABB(bid)
         print("  AABB: {} to {}".format(p1, p2))
@@ -858,7 +903,7 @@ class SimulationDriver(object):
             print("    Orientation: {}".format(s["localFrameOrientation"]))
           if s["meshFileName"]:
             print("    Mesh: {}".format(s["meshFileName"]))
-        for c in self.app.getBodyCollision(bid, 0):
+        for c in self.app.getBodyCollision(bid, -1, failSoft=True):
           print("  Collider: {} dim={}".format(c["geomType"], c["dimensions"]))
       except p.error as e:
         logger.exception(e)
@@ -1002,7 +1047,7 @@ Important notes:
                   help="number of objects (general magnitude)")
   ap.add_argument("-r", "--radius", metavar="R", type=float, default=0.5,
                   help="object radius/size (general magnitude)")
-  ap.add_argument("-m", "--mass", metavar="M", type=float, default=1,
+  ap.add_argument("-m", "--mass", metavar="M", type=float, default=5,
                   help="object mass (general magnitude)")
   ap.add_argument("-g", "--gui", action="store_true",
                   help="start with the GUI visible")
@@ -1038,6 +1083,10 @@ Important notes:
                   help="load URDF object(s)")
   ap.add_argument("--urdfs", metavar="GLOB", action="append",
                   help="load all URDF objects matching GLOB")
+  ap.add_argument("--sb", metavar="PATH", action="append",
+                  help="load soft body (can be used more than once)")
+  ap.add_argument("--rb", metavar="PATH", action="append",
+                  help="load rigid body (can be used more than once)")
   ap.add_argument("--save", metavar="PATH",
                   help="save .bullet file before starting the simulation")
   ap.add_argument("--load", metavar="PATH",
