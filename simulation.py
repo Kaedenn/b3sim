@@ -226,6 +226,7 @@ class Simulation(BulletAppBase):
       bunnyZ          height of the bunny off the floor (20)
       bunnySize       size multiplier of the bunny (10)
       bunnyMass       mass of the bunny (objectMass * 10)
+      margin          collision margin (applies to all soft bodies) (0.5)
 
     Arguments applying to most scenarios:
       bouncy          set all body resitutions to 1 (False)
@@ -432,6 +433,7 @@ class Simulation(BulletAppBase):
       kws["bunnyZ"] = self.getArg("bunnyZ", 20, float)
       kws["bunnySize"] = self.getArg("bunnySize", 10, float)
       kws["bunnyMass"] = self.getArg("bunnyMass", self.objectMass() * 10, float)
+      kws["margin"] = self.getArg("margin", 0.5, float)
       scs.append(BunnyScenario(**kws))
     if wantUrdfs:
       scs.append(RandomUrdfScenario())

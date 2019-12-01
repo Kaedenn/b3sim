@@ -366,18 +366,21 @@ class BunnyScenario(ScenarioBase): # {{{0
 
   def setup(self, app):
     objs = super(BunnyScenario, self).setup(app)
-    kwargs = {
+    # Create bunny
+    kws = {
       "pos": app.worldFloor() + V3(z=self.get("bunnyZ", 5, float)),
       "orn": p.getQuaternionFromEuler((math.pi/2, 0, math.pi/2)),
       "scale": self.get("bunnySize", 10, float),
       "mass": self.get("bunnyMass", app.objectMass() * 100, float),
-      "margin": 0.5
+      "margin": self.get("margin", 0.5, float)
     }
-    b = app.loadSoftBody("data/bunny.obj", **kwargs)
+    b = app.loadSoftBody("data/bunny.obj", **kws)
     objs.append(b)
-    kwargs["pos"][2] += kwargs["scale"] * 2 + 5;
-    kwargs["mass"] *= 10
-    b = app.createBox(mass=kwargs["mass"], pos=kwargs["pos"], exts=V3(10, 10, 1), rgba=withAlpha(C3_WHT, 0.5))
+    # Create box above bunny
+    exts = V3(kws["scale"], kws["scale"], 1)
+    pos = kws["pos"] + V3(z=kws["scale"] * 2.5)
+    mass = kws["mass"] * 10
+    b = app.createBox(mass=mass, pos=pos, exts=exts, rgba=withAlpha(C3_WHT, 0.5))
     objs.append(b)
     app.setBodyTexture(b, "data/white.png")
     return self._applyTransforms(app, objs)
