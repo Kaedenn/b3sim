@@ -139,6 +139,22 @@ def addLogging(func): # {{{0
   return wrapper
 # 0}}}
 
+# Added features {{{0
+FEATURE_VERBOSE = "VerboseMode"
+FEATURE_NOTCONNECTEDERROR = "NotConnectedError"
+FEATURE_X11 = "X11"
+FEATURE_B3PRINT = "B3Print"
+FEATURE_B3WARNING = "B3Warning"
+FEATURE_B3ERROR = "B3Error"
+FEATURE_EXTENDEDKEYS = "ExtendedKeySupport"
+FEATURE_GUI_BUTTONS = "GUI::Buttons"
+FEATURE_GUI_BUTTONS_RESET = "GUI::Buttons::Reset"
+FEATURE_SOFT_BODY_EXTRACONFIG = "SoftBody::ExtraConfig"
+# 0}}}
+
+# Ensure pybullet has all of the APIs added by the custom build, within
+# reason. This is to ensure compatability between the base pybullet API and
+# the custom build.
 def ensurePybulletAPIs(): # {{{0
   "Ensure pybullet has all of the newly-added constants and functions"
   def _ensurePybulletProperty(name, val): # {{{1
