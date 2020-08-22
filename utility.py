@@ -36,6 +36,110 @@ try:
 except ImportError:
   from time import monotonic
 
+# Custom argparse.ArgumentParser class {{{0
+class ArgumentParser(argparse.ArgumentParser):
+  """argparse.ArgumentParser wrapper that provides some extra functionality.
+
+  The following additional keyword arguments are available:
+    verbose    Print information about each argument added (default: False)
+    exit       Allow the parser to exit the interpreter (default: True)
+
+  Note that all arguments must have unique destinations (names). This is a new
+  constraint that the original argument parser doesn't require. Adding
+  arguments with duplicate names will result in a ValueError.
+  """
+  def __init__(self, *args, **kwargs):
+    "Create the parser; see argparse.ArgumentParser.__init__"
+    self._a = {} # Argument storage
+    self._pass_exit = True
+    self._verbose = False
+    if "verbose" in kwargs:
+      self._verbose = kwargs.get("verbose")
+      del kwargs["verbose"]
+    if "exit" in kwargs:
+      self._pass_exit = kwargs.get("exit")
+      del kwargs["exit"]
+    super(ArgumentParser, self).__init__(*args, **kwargs)
+
+  def exit(self, status=0, message=None):
+    "Intercept ArgumentParser.exit if __init__ was called with exit=False"
+    if self._pass_exit:
+      super(ArgumentParser, self).exit(status=status, message=message)
+    else:
+      sys.stderr.write("ArgumentParser: exit({}) ignored".format(status))
+      if message is not None:
+        sys.stderr.write("; ")
+        if len(sys.argv) == 0 or len(sys.argv) == 1 and not sys.argv[0]:
+          sys.stderr.write("__main__")
+        else:
+          sys.stderr.write(subprocess.list2cmdline(sys.argv))
+        if not message.strip().startswith(":"):
+          sys.stderr.write(": ")
+        sys.stderr.write(message)
+      else:
+        sys.stderr.write("\n")
+
+  def add_argument(self, *args, **kwargs):
+    "Add an argument definition; see argparse.ArgumentParser.add_argument"
+    action = super(ArgumentParser, self).add_argument(*args, **kwargs)
+    action.parent = self
+    dest = kwargs.get("dest", action.dest)
+    info = {"dest": dest, "a": action, "action": "store"}
+    if "action" in kwargs:
+      info["action"] = kwargs["action"]
+    if dest in self._a:
+      raise ValueError("Duplicate argument {!r}".format(dest))
+    self._a[dest] = info
+    if self._verbose:
+      sys.stderr.write(repr(info))
+      sys.stderr.write("\n")
+
+  def _get_or_none(self, dest, entry=None):
+    """Return the info dict (if entry is None) or a single info entry for the
+    argument or None if the argument doesn't exist. Raises AttributeError on an
+    invalid entry"""
+    if dest in self._a:
+      if entry is None:
+        return self._a[dest]
+      else:
+        return self._a[dest][entry]
+
+  def get_action_for(self, dest):
+    """Return the 'action' for the given argument name, or None if the argument
+    doesn't exist"""
+    return self._get_or_none(dest, "action")
+
+  def get_definition_for(self, dest):
+    """Return the argument class for a given argument name, or None if the
+    argument doesn't exist"""
+    return self._get_or_none(dest, "a")
+
+  def get_info(self, dest):
+    """Return all known information for a given argument name, or None if the
+    argument doesn't exist"""
+    return self._get_or_none(dest)
+
+  def is_multi(self, dest):
+    """Return True if the argument accepts more than one value. Return None if
+    the argument doesn't exist"""
+    argobj = self.get_definition_for(dest)
+    action = self.get_action_for(dest)
+    if action == "Append":
+      return True
+    if argobj.nargs == argparse.ZERO_OR_MORE:
+      return True
+    if argobj.nargs == argparse.ONE_OR_MORE:
+      return True
+    if argobj.nargs == argparse.REMAINDER:
+      return True
+    try:
+      if argobj.nargs > 1:
+        return True
+    except TypeError as _:
+      pass
+    return False
+# 0}}}
+
 # Custom argparse help formatter {{{0
 class ArgumentDefaultsHelpFormatter(argparse.HelpFormatter):
   """Help message formatter which adds default values to argument help.
@@ -43,14 +147,32 @@ class ArgumentDefaultsHelpFormatter(argparse.HelpFormatter):
   for omitting default values of True, False, or None.
   """
   def _get_help_string(self, action):
+    "Add extra formatting to the help string"
     help = action.help
+    # Append "(multi)" if argument is an _AppendAction
+    add_multi = False
+    if action.nargs in (argparse.ONE_OR_MORE, argparse.ZERO_OR_MORE):
+      add_multi = True
+    elif action.nargs == argparse.REMAINDER:
+      add_multi = True
+    else:
+      try:
+        if isinstance(action, argparse._AppendAction):
+          add_multi = True
+      except AttributeError as _:
+        pass
+    if add_multi:
+      help += " (multi)"
+    # Append "(default: <text>)"
     if '%(default)' not in action.help:
       if action.default not in (argparse.SUPPRESS, True, False, None):
         defaulting_nargs = [argparse.OPTIONAL, argparse.ZERO_OR_MORE]
         if action.option_strings or action.nargs in defaulting_nargs:
           help += ' (default: %(default)s)'
     return help
+
   def _fill_text(self, text, width, indent):
+    "Change how the parser fills text"
     return "".join([indent + line for line in text.splitlines(True)])
 # 0}}}
 
@@ -85,13 +207,13 @@ C_NONE = [0, 0, 0, 0]
 def parseColor(c, cmax=256, scale=1, forceAlpha=None): # {{{0
   """Parse a color 0 <= c < cmax and rescale to 0 <= c < scale
 
-  Understood inputs:
+  Valid formats:
     string "#rrggbb"
     string "#rrggbbaa"
     string "rr,gg,bb"
     string "rr,gg,bb,aa"
-    3-sequence (r, g, b) (can be any iterable such that len(i) == 3)
-    4-sequence (r, g, b, a) (can be any iterable such that len(i) == 4)
+    3-sequence (r, g, b) (can be any indexable sequence with len(i) == 3)
+    4-sequence (r, g, b, a) (can be any indexable sequence with len(i) == 4)
 
   If forceAlpha is supplied, then the existing alpha component is discarded
   and forceAlpha used instead.
