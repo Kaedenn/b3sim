@@ -264,6 +264,11 @@ class BulletAppBase(object):
     self._createVisualShapeArgs = (
         _or(createVisualShapeArgs, ()),
         _or(createVisualShapeKwargs, {}))
+    if hasattr(p, "getEnabledFeatures"):
+      self._features = p.getEnabledFeatures()
+      logger.debug("Features: {}".format(self._features))
+    else:
+      self._features = ()
     if connect:
       self.connect()
   # 1}}}
@@ -801,7 +806,11 @@ class BulletAppBase(object):
                    scale=None,
                    mass=None,
                    margin=None):
-    "Load a soft body into the world"
+    """Load a soft body into the world.
+    Defaults:
+      scale = 1 (see PhysicsServerCommandProcessor.cpp)
+      mass = 1 (see PhysicsServerCommandProcessor.cpp)
+      margin = 0.02 (see PhysicsServerCommandProcessor.cpp)"""
     if not hasattr(p, "loadSoftBody"):
       logger.error("pybullet error: loadSoftBody is not available\n")
       return None
@@ -816,6 +825,17 @@ class BulletAppBase(object):
       args["mass"] = mass
     if margin is not None:
       args["collisionMargin"] = margin
+    if self._features and pyb3.FEATURE_SOFT_BODY_EXTRACONFIG in self._features:
+      args["extraConfig"] = (
+        ("nvi", "i", 10),
+        ("npi", "i", 20),
+        ("ndi", "i", 10),
+        ("nci", "i", 10),
+        ("damping", "d", 0.0),
+        ("mAST", "d", 0.9),
+        ("mLST", "d", 0.0),
+        ("mVST", "d", 0.9),
+      )
     ret = assertSuccess(p.loadSoftBody(path, **args), "loadSoftBody")
     self._bodies.add(ret)
     return ret
