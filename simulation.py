@@ -1013,10 +1013,18 @@ Projection Matrix:
 
 def parseArgs(): # {{{0
   "Return the argument object and a list of the unhandled args"
-  ap = argparse.ArgumentParser(
-      usage="%(prog)s [options] [pybullet-options]",
+  ap = ArgumentParser(
+      usage="%(prog)s [-c CONFIG...] [options] [pybullet-options]",
       add_help=False,
       epilog="""
+Options marked with (multi) can be used more than once.
+
+To load predefined scenarios, use -c:
+  %(prog)s -c walls -c b1                 Load walls and "Bricks 1"
+  %(prog)s -c walls -c b2                 Load walls and "Bricks 2"
+  %(prog)s -c walls -c b3                 Load walls and "Bricks 3"
+  %(prog)s -c bunny                       Load "Bunny"
+
 Important notes:
 * All options after -- will be ignored and passed to pybullet as-is.
 * All unhandled arguments are passed to pybullet as-is.
@@ -1031,7 +1039,7 @@ Important notes:
 * Bullet plugins can be loaded using --plugin "path:suffix". Custom code is
   needed for calling plugin commands.
 * Because the client and server run at different framerates, image/video
-  dumping may skip frames.""",
+  dumping may skip frames. This is a known issue.""",
       formatter_class=ArgumentDefaultsHelpFormatter)
   ap.add_argument("-h", "--help", action="store_true",
                   help="show this message and exit")
@@ -1086,9 +1094,9 @@ Important notes:
   ap.add_argument("--urdfs", metavar="GLOB", action="append",
                   help="load all URDF objects matching GLOB")
   ap.add_argument("--sb", metavar="PATH", action="append",
-                  help="load soft body (can be used more than once)")
+                  help="load soft body")
   ap.add_argument("--rb", metavar="PATH", action="append",
-                  help="load rigid body (can be used more than once)")
+                  help="load rigid body")
   ap.add_argument("--save", metavar="PATH",
                   help="save .bullet file before starting the simulation")
   ap.add_argument("--load", metavar="PATH",
