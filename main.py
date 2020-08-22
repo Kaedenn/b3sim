@@ -13,4 +13,4 @@ def _get_path(f):
     d = os.path.dirname(sys.argv[0])
     return os.path.join(d, f) if d else f
 
-execfile(_get_path(MAIN_PROGRAM))
+exec(open(_get_path(MAIN_PROGRAM)).read())
